@@ -30,6 +30,19 @@ import {
 } from "@/lib/dndReorder";
 import { NEST_HOVER_MS, NEST_BELOW_PREFIX } from "@/lib/constants";
 
+const SHOW_CRITICAL_PATH_STORAGE_KEY = "abundance-show-critical-path";
+
+function readShowCriticalPath(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    const v = localStorage.getItem(SHOW_CRITICAL_PATH_STORAGE_KEY);
+    if (v === null) return true;
+    return v === "1" || v === "true";
+  } catch {
+    return true;
+  }
+}
+
 /** Prefer the thin strip below a row (`nest-below-*`) so nesting vs reorder is explicit; else pointer-in-rect; else closest center. */
 const nestStripCollision: CollisionDetection = (args) => {
   const pointCollisions = pointerWithin(args);
@@ -57,6 +70,7 @@ export default function GTDBoard() {
   } = useTasks();
 
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [showCriticalPath, setShowCriticalPath] = useState(readShowCriticalPath);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   /** Task id currently hovered while dragging; timer starts when this changes. */
@@ -78,6 +92,17 @@ export default function GTDBoard() {
     () => tasks.find((t) => t._id === activeId) || null,
     [tasks, activeId]
   );
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        SHOW_CRITICAL_PATH_STORAGE_KEY,
+        showCriticalPath ? "1" : "0"
+      );
+    } catch {
+      /* ignore quota / private mode */
+    }
+  }, [showCriticalPath]);
 
   const activeTaskSection = useMemo(
     () =>
@@ -327,33 +352,90 @@ export default function GTDBoard() {
               GTD + Critical Path Method
             </p>
           </div>
-          <button
-            type="button"
-            onClick={async () => {
-              await fetch("/api/auth/logout", { method: "POST" });
-              router.replace("/login");
-              router.refresh();
-            }}
+          <div
             style={{
-              fontSize: 13,
-              padding: "6px 12px",
-              borderRadius: 6,
-              border: "1px solid var(--border-color)",
-              background: "var(--bg-tertiary)",
-              color: "var(--text-secondary)",
-              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              flexWrap: "wrap",
+              justifyContent: "flex-end",
             }}
           >
-            Sign out
-          </button>
+            {projectSection && (
+              <button
+                type="button"
+                onClick={() => setShowCriticalPath((v) => !v)}
+                aria-pressed={showCriticalPath}
+                title={
+                  showCriticalPath
+                    ? "Hide critical path graph"
+                    : "Show critical path graph"
+                }
+                style={{
+                  fontSize: 13,
+                  padding: "6px 12px",
+                  borderRadius: 6,
+                  border: "1px solid var(--border-color)",
+                  background: showCriticalPath
+                    ? "var(--bg-tertiary)"
+                    : "rgba(75, 156, 245, 0.12)",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
+                {showCriticalPath ? "Hide graph" : "Show graph"}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={async () => {
+                await fetch("/api/auth/logout", { method: "POST" });
+                router.replace("/login");
+                router.refresh();
+              }}
+              style={{
+                fontSize: 13,
+                padding: "6px 12px",
+                borderRadius: 6,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-tertiary)",
+                color: "var(--text-secondary)",
+                cursor: "pointer",
+              }}
+            >
+              Sign out
+            </button>
+          </div>
         </header>
 
-        {projectSection && (
+        {projectSection && showCriticalPath && (
           <CriticalPathTimeline
             section={projectSection}
             tasks={tasks}
             onSelectTask={(id) => setSelectedTaskId(id)}
           />
+        )}
+
+        {projectSection && !showCriticalPath && (
+          <div style={{ margin: "0 24px 12px" }}>
+            <button
+              type="button"
+              onClick={() => setShowCriticalPath(true)}
+              style={{
+                fontSize: 12,
+                padding: "6px 10px",
+                borderRadius: 6,
+                border: "1px dashed var(--border-color)",
+                background: "var(--bg-secondary)",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                width: "100%",
+                maxWidth: 420,
+              }}
+            >
+              Critical path graph hidden — click to show
+            </button>
+          </div>
         )}
 
         {/* Content */}

@@ -113,6 +113,46 @@ button {
   opacity: 1 !important;
 }
 
+/* Section title: needs a flex min-width:0 wrapper or long names wrap one word per line */
+.section-header {
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 6px;
+}
+
+.section-header-title-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.section-header-title-btn,
+.section-header-title-input {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.section-header-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 1023px) {
+  .section-header-toolbar {
+    flex: 1 1 100%;
+    padding-left: 24px;
+    box-sizing: border-box;
+  }
+
+  .section-header-spacer {
+    display: none;
+  }
+}
+
 /* Spinner */
 @keyframes spin {
   to {
@@ -123,6 +163,80 @@ button {
 /* Smooth transitions */
 .task-row {
   transition: padding-left 0.15s ease;
+}
+
+/* Task row layout */
+.task-row-inner {
+  padding: 6px 12px 6px 4px;
+  gap: 4px;
+  min-height: 40px;
+}
+
+.task-row-circle-row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.task-row-text-stack {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.task-row-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* Keep priority / dates on one horizontal strip; scroll on narrow screens instead of stacking */
+.task-row-title-meta {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+@media (max-width: 1023px) {
+  .task-row-circle-row {
+    gap: 8px;
+  }
+
+  .task-row-title-row {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+
+  .task-row-title-meta {
+    flex: 0 1 auto;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-width: min(220px, 48vw);
+    padding-bottom: 1px;
+    gap: 4px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .task-row-title-meta::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.task-row-notes-wrap {
+  padding: 0 4px 2px;
+}
+
+.task-row-notes-toggle {
+  margin: 4px 0 0;
 }
 
 /* Task title: base 14px, desktop +2px (16px) */
@@ -141,6 +255,7 @@ button {
 /* Notes under task: slightly smaller, muted */
 .task-row-notes {
   font-size: 13px;
+  line-height: 1.45;
 }
 
 /* max-height works with pre-wrap; -webkit-line-clamp does not */

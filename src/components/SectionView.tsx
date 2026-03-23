@@ -129,6 +129,7 @@ export default function SectionView({
             display: "flex",
             alignItems: "center",
             cursor: "pointer",
+            flexShrink: 0,
           }}
         >
           {section.collapsed ? (
@@ -138,117 +139,124 @@ export default function SectionView({
           )}
         </button>
 
-        {editingTitle ? (
-          <input
-            ref={titleInputRef}
-            value={titleDraft}
-            onChange={(e) => setTitleDraft(e.target.value)}
-            onBlur={commitTitle}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commitTitle();
-              if (e.key === "Escape") {
-                setTitleDraft(section.title);
-                setEditingTitle(false);
-              }
-            }}
-            style={{
-              fontWeight: 600,
-              fontSize: 15,
-              color: "var(--text-primary)",
-              background: "var(--bg-secondary)",
-              border: "1px solid var(--accent-blue)",
-              borderRadius: 4,
-              padding: "2px 6px",
-              minWidth: 120,
-              flex: 1,
-              maxWidth: 320,
-            }}
-          />
-        ) : (
-          <button
-            type="button"
-            onDoubleClick={() => setEditingTitle(true)}
-            style={{
-              fontWeight: 600,
-              fontSize: 15,
-              color: "var(--text-primary)",
-              background: "none",
-              border: "none",
-              padding: "2px 4px",
-              borderRadius: 4,
-              cursor: "text",
-              textAlign: "left",
-            }}
-            title="Double-click to rename section"
-          >
-            {section.title}
-          </button>
-        )}
+        <div className="section-header-title-wrap">
+          {editingTitle ? (
+            <input
+              ref={titleInputRef}
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={commitTitle}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitTitle();
+                if (e.key === "Escape") {
+                  setTitleDraft(section.title);
+                  setEditingTitle(false);
+                }
+              }}
+              className="section-header-title-input"
+              style={{
+                fontWeight: 600,
+                fontSize: 15,
+                color: "var(--text-primary)",
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--accent-blue)",
+                borderRadius: 4,
+                padding: "2px 6px",
+                minWidth: 0,
+                width: "100%",
+                maxWidth: "100%",
+              }}
+            />
+          ) : (
+            <button
+              type="button"
+              onDoubleClick={() => setEditingTitle(true)}
+              className="section-header-title-btn"
+              style={{
+                fontWeight: 600,
+                fontSize: 15,
+                color: "var(--text-primary)",
+                background: "none",
+                border: "none",
+                padding: "2px 4px",
+                borderRadius: 4,
+                cursor: "text",
+                textAlign: "left",
+                width: "100%",
+                minWidth: 0,
+              }}
+              title="Double-click to rename section"
+            >
+              {section.title}
+            </button>
+          )}
+        </div>
 
-        <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: 4 }}>
+        <span
+          className="section-header-count"
+          style={{ fontSize: 12, color: "var(--text-muted)", flexShrink: 0 }}
+        >
           {sectionTasks.filter((t) => t.parentId === null).length}
         </span>
 
-        <>
-        <button
-          type="button"
-          onClick={() =>
-            onUpdateSection({
-              _id: section._id,
-              isSequential: !section.isSequential,
-            })
-          }
-          title={
-            section.isSequential
-              ? "Top-level tasks are sequential (on)"
-              : "Top-level tasks are sequential (off)"
-          }
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            marginLeft: 6,
-            padding: "4px 8px",
-            borderRadius: 6,
-            border: "1px solid var(--border-color)",
-            background: section.isSequential ? "rgba(59, 130, 246, 0.15)" : "var(--bg-tertiary)",
-            color: section.isSequential ? "var(--accent-blue)" : "var(--text-muted)",
-            fontSize: 11,
-            cursor: "pointer",
-          }}
-        >
-          <ArrowDownRight size={12} />
-          Sequential
-        </button>
+        <div className="section-header-toolbar">
+          <button
+            type="button"
+            onClick={() =>
+              onUpdateSection({
+                _id: section._id,
+                isSequential: !section.isSequential,
+              })
+            }
+            title={
+              section.isSequential
+                ? "Top-level tasks are sequential (on)"
+                : "Top-level tasks are sequential (off)"
+            }
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "4px 8px",
+              borderRadius: 6,
+              border: "1px solid var(--border-color)",
+              background: section.isSequential ? "rgba(59, 130, 246, 0.15)" : "var(--bg-tertiary)",
+              color: section.isSequential ? "var(--accent-blue)" : "var(--text-muted)",
+              fontSize: 11,
+              cursor: "pointer",
+            }}
+          >
+            <ArrowDownRight size={12} />
+            Sequential
+          </button>
 
-        <select
-          value={section.topLevelSort ?? "manual"}
-          onChange={(e) =>
-            onUpdateSection({
-              _id: section._id,
-              topLevelSort: e.target.value as TopLevelSort,
-            })
-          }
-          title="Sort top-level tasks (nested subtasks keep manual order)"
-          style={{
-            fontSize: 11,
-            marginLeft: 6,
-            padding: "4px 8px",
-            borderRadius: 6,
-            border: "1px solid var(--border-color)",
-            background: "var(--bg-tertiary)",
-            color: "var(--text-secondary)",
-            cursor: "pointer",
-            maxWidth: 148,
-          }}
-        >
-          <option value="manual">Order (manual)</option>
-          <option value="priority">Priority</option>
-          <option value="startDate">Start date</option>
-        </select>
-        </>
+          <select
+            value={section.topLevelSort ?? "manual"}
+            onChange={(e) =>
+              onUpdateSection({
+                _id: section._id,
+                topLevelSort: e.target.value as TopLevelSort,
+              })
+            }
+            title="Sort top-level tasks (nested subtasks keep manual order)"
+            style={{
+              fontSize: 11,
+              padding: "4px 8px",
+              borderRadius: 6,
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-tertiary)",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              maxWidth: 148,
+            }}
+          >
+            <option value="manual">Order (manual)</option>
+            <option value="priority">Priority</option>
+            <option value="startDate">Start date</option>
+          </select>
+        </div>
 
-        <div style={{ flex: 1 }} />
+        <div className="section-header-spacer" style={{ flex: 1, minWidth: 8 }} />
 
         <button
           type="button"

@@ -173,10 +173,7 @@ export default function TaskRow({
         style={{
           display: "flex",
           alignItems: "flex-start",
-          padding: "6px 12px 6px 4px",
-          gap: 4,
           borderRadius: 4,
-          minHeight: 40,
           background: isSelected ? "var(--bg-active)" : "transparent",
           position: "relative",
         }}
@@ -250,16 +247,7 @@ export default function TaskRow({
         )}
 
         {/* Circle + text column: circle vertically aligned with first line of title */}
-        <div
-          style={{
-            flex: 1,
-            minWidth: 0,
-            display: "flex",
-            flexDirection: "row",
-            alignItems: "flex-start",
-            gap: 10,
-          }}
-        >
+        <div className="task-row-circle-row">
             {/* Completion circle — sized to match title line, high contrast */}
               <button
                 type="button"
@@ -309,23 +297,8 @@ export default function TaskRow({
                 )}
               </button>
 
-            <div
-              style={{
-                flex: 1,
-                minWidth: 0,
-                display: "flex",
-                flexDirection: "column",
-                gap: 4,
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "flex-start",
-                  gap: 8,
-                  flexWrap: "wrap",
-                }}
-              >
+            <div className="task-row-text-stack">
+              <div className="task-row-title-row">
             {/* Title */}
             {isEditing ? (
               <input
@@ -398,14 +371,14 @@ export default function TaskRow({
               </span>
             )}
 
-            {/* Inline badges */}
+            {/* Inline badges (nowrap + horizontal scroll on narrow screens — see globals.css) */}
             <div
+              className="task-row-title-meta"
               style={{
                 display: "flex",
                 alignItems: "center",
                 gap: 6,
                 flexShrink: 0,
-                flexWrap: "wrap",
               }}
             >
               <span
@@ -596,7 +569,7 @@ export default function TaskRow({
 
           {/* Notes under the title row */}
           {task.notes?.trim() && (
-            <div style={{ padding: "0 4px 2px" }}>
+            <div className="task-row-notes-wrap">
               <p
                 ref={notesRef}
                 className={
@@ -606,7 +579,6 @@ export default function TaskRow({
                 }
                 style={{
                   margin: 0,
-                  lineHeight: 1.45,
                   color: "var(--text-muted)",
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
@@ -621,8 +593,8 @@ export default function TaskRow({
                     e.stopPropagation();
                     setNotesExpanded((v) => !v);
                   }}
+                  className="task-row-notes-toggle"
                   style={{
-                    margin: "4px 0 0",
                     padding: 0,
                     border: "none",
                     background: "none",

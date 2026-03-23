@@ -1,0 +1,169 @@
+@import "tailwindcss";
+
+:root {
+  --bg-primary: #1a1d23;
+  --bg-secondary: #22262e;
+  --bg-tertiary: #2a2e37;
+  --bg-hover: #2f3440;
+  --bg-active: #353a45;
+  --border-color: #353a45;
+  --border-subtle: #2a2e37;
+  --text-primary: #e4e6ea;
+  --text-secondary: #9ca3af;
+  --text-muted: #6b7280;
+  --accent-blue: #4b9cf5;
+  --accent-amber: #f59e0b;
+  --accent-green: #22c55e;
+  --accent-red: #ef4444;
+  --accent-purple: #a855f7;
+  --critical-path: #f59e0b;
+  --tag-bg: #374151;
+  --tag-text: #9ca3af;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    Ubuntu, Cantarell, sans-serif;
+  margin: 0;
+  padding: 0;
+}
+
+::selection {
+  background: var(--accent-blue);
+  color: white;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+input, textarea, select {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: var(--accent-blue);
+}
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* Task row hover effects */
+.task-row-inner:hover {
+  background: var(--bg-hover) !important;
+}
+
+.task-row-inner:hover .drag-handle {
+  opacity: 1 !important;
+}
+
+.task-row-inner:hover .task-actions {
+  opacity: 1 !important;
+}
+
+.task-row-selected .task-row-inner {
+  background: var(--bg-active) !important;
+}
+
+.task-row-overlay {
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  opacity: 0.95;
+}
+
+.task-row-overlay .drag-handle {
+  opacity: 1 !important;
+}
+
+/* Section header hover */
+.section-header:hover {
+  background: var(--bg-hover);
+}
+
+.section-header:hover .section-add-btn {
+  opacity: 1 !important;
+}
+
+/* Spinner */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Smooth transitions */
+.task-row {
+  transition: padding-left 0.15s ease;
+}
+
+/* Task title: base 14px, desktop +2px (16px) */
+.task-row-title,
+.task-row-title-input {
+  font-size: 14px;
+}
+
+@media (min-width: 1024px) {
+  .task-row-title,
+  .task-row-title-input {
+    font-size: 16px;
+  }
+}
+
+/* Notes under task: slightly smaller, muted */
+.task-row-notes {
+  font-size: 13px;
+}
+
+/* max-height works with pre-wrap; -webkit-line-clamp does not */
+.task-row-notes-clamp {
+  max-height: calc(2 * 1.45em);
+  overflow: hidden;
+}
+
+/* Hint the strip below a row where drop = after / long-hover = nest */
+.task-row:hover + .nest-drop-zone {
+  border-top-color: rgba(255, 255, 255, 0.06);
+}
+
+/* Completion circle: clearer hover / focus (keeps inline border color) */
+.task-row-checkbox:hover {
+  background: rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+    0 0 0 1px rgba(255, 255, 255, 0.12);
+  filter: brightness(1.06);
+}
+
+.task-row-checkbox:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}

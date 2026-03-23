@@ -7,6 +7,9 @@ export type TopLevelSort = "manual" | "priority" | "startDate";
 
 export type SectionType = "project" | "recurring" | "todo";
 
+/** `none` = one-off task; recurring section tasks can use daily/weekly/monthly. */
+export type RepeatFrequency = "none" | "daily" | "weekly" | "monthly";
+
 export interface TaskItem {
   _id: string;
   sectionId: string;
@@ -20,13 +23,22 @@ export interface TaskItem {
   timeEstimate: number | null;
   timeUnit: TimeUnit;
   notes: string;
-  url: string;
+  /** External links (trimmed non-empty strings in UI). */
+  urls: string[];
   startDate: string | null;
   dueDate: string | null;
+  /** `HH:mm` local — todo: due time (with due date); recurring: scheduled time (optional without due date). */
+  dueTime?: string | null;
   isCriticalPath: boolean;
   isSequential: boolean;
   collapsed: boolean;
   tags: string[];
+  /** When set and not `none`, completing the task logs a date and advances `dueDate`. */
+  repeatFrequency?: RepeatFrequency;
+  /** 0–6 Sun–Sat; used when `repeatFrequency` is `weekly`. */
+  repeatWeekdays?: number[];
+  /** YYYY-MM-DD entries when a recurring instance was completed. */
+  completionHistory?: string[];
   createdAt: string;
   updatedAt: string;
 }

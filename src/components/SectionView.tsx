@@ -5,11 +5,22 @@ import {
   SortableContext,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { Section, TaskItem, TopLevelSort } from "@/lib/types";
+import { Section, TaskItem, TopLevelSort, SectionType } from "@/lib/types";
 import { buildVisibleTaskTree } from "@/lib/timelineUtils";
+import {
+  filterTasksForMainView,
+  dueBucketForTask,
+  formatDueTimeDisplay,
+} from "@/lib/recurrence";
 import { ChevronRight, ChevronDown, Plus, Comment, ArrowDownRight } from "./Icons";
 import TaskRow from "./TaskRow";
 import NestDropZone from "./NestDropZone";
+
+function dueDateTimeLabel(t: TaskItem): string {
+  const tm = formatDueTimeDisplay(t.dueTime);
+  if (!t.dueDate?.trim()) return tm || "";
+  return tm ? `${t.dueDate} · ${tm}` : t.dueDate;
+}
 
 interface Props {
   section: Section;
@@ -17,10 +28,21 @@ interface Props {
   onUpdateSection: (section: Partial<Section> & { _id: string }) => void;
   onUpdateTask: (task: Partial<TaskItem> & { _id: string }) => void;
   onDeleteTask: (id: string) => void;
-  onCreateTask: (sectionId: string, parentId: string | null, depth: number) => void;
-  onCreateTaskAfter: (afterTask: TaskItem) => void | Promise<void>;
+  onCreateTask: (
+    sectionId: string,
+    parentId: string | null,
+    depth: number,
+    sectionType?: SectionType
+  ) => void;
+  onCreateTaskAfter: (afterTask: TaskItem, sectionType?: SectionType) => void | Promise<void>;
   selectedTaskId: string | null;
   onSelectTask: (id: string | null) => void;
+  showCompletedOnMain: boolean;
+  /** Project section: matches Gantt focused view. */
+  projectFocusedView?: boolean;
+  focusedProjectMainIds?: Set<string> | null;
+  focusedProjectUndatedIds?: Set<string> | null;
+  onExitProjectFocusedView?: () => void;
 }
 
 export default function SectionView({
@@ -33,42 +55,135 @@ export default function SectionView({
   onCreateTaskAfter,
   selectedTaskId,
   onSelectTask,
+  showCompletedOnMain,
+  projectFocusedView = false,
+  focusedProjectMainIds = null,
+  focusedProjectUndatedIds = null,
+  onExitProjectFocusedView,
 }: Props) {
-  const sectionTasks = useMemo(
+  const sectionTasksRaw = useMemo(
     () => tasks.filter((t) => t.sectionId === section._id),
     [tasks, section._id]
   );
 
+  const baseAfterCompleted = useMemo(
+    () => filterTasksForMainView(sectionTasksRaw, showCompletedOnMain),
+    [sectionTasksRaw, showCompletedOnMain]
+  );
+
+  const { sectionTasksMain, sectionTasksUndated } = useMemo(() => {
+    if (
+      section.type !== "project" ||
+      !projectFocusedView ||
+      !focusedProjectMainIds ||
+      !focusedProjectUndatedIds
+    ) {
+      return {
+        sectionTasksMain: baseAfterCompleted,
+        sectionTasksUndated: [] as TaskItem[],
+      };
+    }
+    const main = baseAfterCompleted.filter(
+      (t) =>
+        focusedProjectMainIds.has(t._id) &&
+        !focusedProjectUndatedIds.has(t._id)
+    );
+    const und = baseAfterCompleted.filter((t) =>
+      focusedProjectUndatedIds.has(t._id)
+    );
+    return { sectionTasksMain: main, sectionTasksUndated: und };
+  }, [
+    section.type,
+    projectFocusedView,
+    focusedProjectMainIds,
+    focusedProjectUndatedIds,
+    baseAfterCompleted,
+  ]);
+
+  const recurringDueGroups = useMemo(() => {
+    if (section.type !== "recurring") return null;
+    const overdue: TaskItem[] = [];
+    const today: TaskItem[] = [];
+    const soon: TaskItem[] = [];
+    for (const t of sectionTasksRaw) {
+      if (t.completed || !t.dueDate?.trim()) continue;
+      const b = dueBucketForTask(t);
+      if (b === "overdue") overdue.push(t);
+      else if (b === "today") today.push(t);
+      else if (b === "soon") soon.push(t);
+    }
+    const sortByDue = (a: TaskItem, b: TaskItem) =>
+      (a.dueDate ?? "").localeCompare(b.dueDate ?? "");
+    overdue.sort(sortByDue);
+    today.sort(sortByDue);
+    soon.sort(sortByDue);
+    return { overdue, today, soon };
+  }, [section.type, sectionTasksRaw]);
+
   const collapsedIds = useMemo(
-    () => new Set(sectionTasks.filter((t) => t.collapsed).map((t) => t._id)),
-    [sectionTasks]
+    () => new Set(sectionTasksMain.filter((t) => t.collapsed).map((t) => t._id)),
+    [sectionTasksMain]
+  );
+
+  const collapsedIdsUndated = useMemo(
+    () =>
+      new Set(sectionTasksUndated.filter((t) => t.collapsed).map((t) => t._id)),
+    [sectionTasksUndated]
   );
 
   const flatTasks = useMemo(
     () =>
       buildVisibleTaskTree(
-        sectionTasks,
+        sectionTasksMain,
         null,
         collapsedIds,
         section.topLevelSort ?? "manual"
       ),
-    [sectionTasks, collapsedIds, section.topLevelSort]
+    [sectionTasksMain, collapsedIds, section.topLevelSort]
+  );
+
+  const flatTasksUndated = useMemo(
+    () =>
+      buildVisibleTaskTree(
+        sectionTasksUndated,
+        null,
+        collapsedIdsUndated,
+        section.topLevelSort ?? "manual"
+      ),
+    [sectionTasksUndated, collapsedIdsUndated, section.topLevelSort]
   );
 
   const taskIds = useMemo(() => flatTasks.map((t) => t._id), [flatTasks]);
 
+  const undatedTaskIds = useMemo(
+    () => flatTasksUndated.map((t) => t._id),
+    [flatTasksUndated]
+  );
+
   const childCountMap = useMemo(() => {
     const map: Record<string, number> = {};
-    for (const t of sectionTasks) {
+    for (const t of sectionTasksMain) {
       if (t.parentId) {
         map[t.parentId] = (map[t.parentId] || 0) + 1;
       }
     }
     return map;
-  }, [sectionTasks]);
+  }, [sectionTasksMain]);
+
+  const childCountMapUndated = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const t of sectionTasksUndated) {
+      if (t.parentId) {
+        map[t.parentId] = (map[t.parentId] || 0) + 1;
+      }
+    }
+    return map;
+  }, [sectionTasksUndated]);
 
   const toggleCollapse = (taskId: string) => {
-    const t = sectionTasks.find((t) => t._id === taskId);
+    const t =
+      sectionTasksMain.find((x) => x._id === taskId) ??
+      sectionTasksUndated.find((x) => x._id === taskId);
     if (t) {
       onUpdateTask({ _id: taskId, collapsed: !t.collapsed });
     }
@@ -196,7 +311,7 @@ export default function SectionView({
           className="section-header-count"
           style={{ fontSize: 12, color: "var(--text-muted)", flexShrink: 0 }}
         >
-          {sectionTasks.filter((t) => t.parentId === null).length}
+          {sectionTasksMain.filter((t) => t.parentId === null).length}
         </span>
 
         <div className="section-header-toolbar">
@@ -260,7 +375,7 @@ export default function SectionView({
 
         <button
           type="button"
-          onClick={() => onCreateTask(section._id, null, 0)}
+          onClick={() => onCreateTask(section._id, null, 0, section.type)}
           style={{
             background: "none",
             border: "none",
@@ -294,6 +409,126 @@ export default function SectionView({
         </button>
       </div>
 
+      {/* Recurring: due & upcoming */}
+      {!section.collapsed && recurringDueGroups && (
+        (recurringDueGroups.overdue.length > 0 ||
+          recurringDueGroups.today.length > 0 ||
+          recurringDueGroups.soon.length > 0) && (
+          <div
+            style={{
+              margin: "0 16px 10px 44px",
+              padding: "10px 12px",
+              borderRadius: 8,
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-secondary)",
+              fontSize: 12,
+            }}
+          >
+            <div
+              style={{
+                fontWeight: 600,
+                color: "var(--text-secondary)",
+                marginBottom: 8,
+                fontSize: 11,
+                textTransform: "uppercase",
+                letterSpacing: "0.04em",
+              }}
+            >
+              Due & upcoming
+            </div>
+            {recurringDueGroups.overdue.length > 0 && (
+              <div style={{ marginBottom: 8 }}>
+                <span style={{ color: "var(--accent-red)", fontWeight: 600 }}>Overdue</span>
+                <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: "var(--text-muted)" }}>
+                  {recurringDueGroups.overdue.map((t) => (
+                    <li key={t._id}>
+                      <button
+                        type="button"
+                        onClick={() => onSelectTask(t._id)}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          padding: 0,
+                          cursor: "pointer",
+                          color: "var(--accent-blue)",
+                          textAlign: "left",
+                          fontSize: 12,
+                        }}
+                      >
+                        {t.title.trim() || "Untitled"}
+                      </button>
+                      <span style={{ marginLeft: 6, opacity: 0.85 }}>
+                        ({t.dueDate})
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {recurringDueGroups.today.length > 0 && (
+              <div style={{ marginBottom: 8 }}>
+                <span style={{ color: "var(--accent-amber)", fontWeight: 600 }}>Due today</span>
+                <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: "var(--text-muted)" }}>
+                  {recurringDueGroups.today.map((t) => (
+                    <li key={t._id}>
+                      <button
+                        type="button"
+                        onClick={() => onSelectTask(t._id)}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          padding: 0,
+                          cursor: "pointer",
+                          color: "var(--accent-blue)",
+                          textAlign: "left",
+                          fontSize: 12,
+                        }}
+                      >
+                        {t.title.trim() || "Untitled"}
+                      </button>
+                      {t.dueTime?.trim() && (
+                        <span style={{ marginLeft: 6, opacity: 0.85 }}>
+                          ({formatDueTimeDisplay(t.dueTime)})
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {recurringDueGroups.soon.length > 0 && (
+              <div>
+                <span style={{ color: "var(--text-secondary)", fontWeight: 600 }}>Next 7 days</span>
+                <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: "var(--text-muted)" }}>
+                  {recurringDueGroups.soon.map((t) => (
+                    <li key={t._id}>
+                      <button
+                        type="button"
+                        onClick={() => onSelectTask(t._id)}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          padding: 0,
+                          cursor: "pointer",
+                          color: "var(--accent-blue)",
+                          textAlign: "left",
+                          fontSize: 12,
+                        }}
+                      >
+                        {t.title.trim() || "Untitled"}
+                      </button>
+                      <span style={{ marginLeft: 6, opacity: 0.85 }}>
+                        ({dueDateTimeLabel(t)})
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )
+      )}
+
       {/* Task List */}
       {!section.collapsed && (
         <div style={{ paddingLeft: 8 }}>
@@ -309,47 +544,143 @@ export default function SectionView({
                   onUpdate={onUpdateTask}
                   onDelete={onDeleteTask}
                   onAddChild={() =>
-                    onCreateTask(section._id, task._id, task.depth + 1)
+                    onCreateTask(section._id, task._id, task.depth + 1, section.type)
                   }
-                  onCreateSiblingAfter={() => onCreateTaskAfter(task)}
+                  onCreateSiblingAfter={() => onCreateTaskAfter(task, section.type)}
                   onToggleCollapse={() => toggleCollapse(task._id)}
                   onSelect={() => onSelectTask(task._id)}
                   isSelected={selectedTaskId === task._id}
                   sectionSequentialForRoot={
                     task.parentId === null ? section.isSequential : undefined
                   }
+                  sectionType={section.type}
                 />
                 <NestDropZone taskId={task._id} />
               </React.Fragment>
             ))}
           </SortableContext>
 
-          {flatTasks.length === 0 && (
+          {section.type === "project" && projectFocusedView && sectionTasksUndated.length > 0 && (
             <div
               style={{
-                padding: "8px 16px 8px 44px",
-                color: "var(--text-muted)",
-                fontSize: 13,
-                fontStyle: "italic",
+                marginTop: 14,
+                paddingTop: 12,
+                borderTop: "1px solid var(--border-color)",
               }}
             >
-              No tasks yet.{" "}
-              <button
-                type="button"
-                onClick={() => onCreateTask(section._id, null, 0)}
-                style={{
-                  background: "none",
-                  border: "none",
-                  color: "var(--accent-blue)",
-                  fontSize: 13,
-                  padding: 0,
-                  textDecoration: "underline",
-                }}
+              <div style={{ padding: "0 8px 10px 16px" }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: "var(--text-secondary)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                  }}
+                >
+                  Unscheduled
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "var(--text-muted)",
+                    marginTop: 4,
+                    lineHeight: 1.4,
+                  }}
+                >
+                  Top-level tasks with no start or due date (and their subtasks).
+                </div>
+              </div>
+              <SortableContext
+                items={undatedTaskIds}
+                strategy={verticalListSortingStrategy}
               >
-                Add one
-              </button>
+                {flatTasksUndated.map((task) => (
+                  <React.Fragment key={task._id}>
+                    <TaskRow
+                      task={task}
+                      childCount={childCountMapUndated[task._id] || 0}
+                      onUpdate={onUpdateTask}
+                      onDelete={onDeleteTask}
+                      onAddChild={() =>
+                        onCreateTask(section._id, task._id, task.depth + 1, section.type)
+                      }
+                      onCreateSiblingAfter={() =>
+                        onCreateTaskAfter(task, section.type)
+                      }
+                      onToggleCollapse={() => toggleCollapse(task._id)}
+                      onSelect={() => onSelectTask(task._id)}
+                      isSelected={selectedTaskId === task._id}
+                      sectionSequentialForRoot={
+                        task.parentId === null ? section.isSequential : undefined
+                      }
+                      sectionType={section.type}
+                    />
+                    <NestDropZone taskId={task._id} />
+                  </React.Fragment>
+                ))}
+              </SortableContext>
             </div>
           )}
+
+          {flatTasks.length === 0 &&
+            !(
+              section.type === "project" &&
+              projectFocusedView &&
+              sectionTasksUndated.length > 0
+            ) && (
+              <div
+                style={{
+                  padding: "8px 16px 8px 44px",
+                  color: "var(--text-muted)",
+                  fontSize: 13,
+                  fontStyle: "italic",
+                }}
+              >
+                {section.type === "project" &&
+                projectFocusedView &&
+                sectionTasksUndated.length === 0 ? (
+                  <>
+                    No tasks match Focused view in the main list.{" "}
+                    {onExitProjectFocusedView && (
+                      <button
+                        type="button"
+                        onClick={onExitProjectFocusedView}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: "var(--accent-blue)",
+                          fontSize: 13,
+                          padding: 0,
+                          textDecoration: "underline",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Show all tasks
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    No tasks yet.{" "}
+                    <button
+                      type="button"
+                      onClick={() => onCreateTask(section._id, null, 0, section.type)}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "var(--accent-blue)",
+                        fontSize: 13,
+                        padding: 0,
+                        textDecoration: "underline",
+                      }}
+                    >
+                      Add one
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
         </div>
       )}
     </div>

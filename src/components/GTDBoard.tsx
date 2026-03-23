@@ -17,8 +17,9 @@ import {
   CollisionDetection,
 } from "@dnd-kit/core";
 import { useSections, useTasks } from "@/lib/hooks";
-import { TaskItem } from "@/lib/types";
+import { TaskItem, SectionType } from "@/lib/types";
 import SectionView from "./SectionView";
+import CompletedTasksView from "./CompletedTasksView";
 import TaskRow from "./TaskRow";
 import TaskDetailPanel from "./TaskDetailPanel";
 import DeleteTaskConfirmModal from "./DeleteTaskConfirmModal";
@@ -29,8 +30,37 @@ import {
   computeSiblingMoveAfter,
 } from "@/lib/dndReorder";
 import { NEST_HOVER_MS, NEST_BELOW_PREFIX } from "@/lib/constants";
+import { taskHasAnyUserData } from "@/lib/taskUserData";
+import {
+  PROJECT_FOCUSED_VIEW_STORAGE_KEY,
+  computeProjectFocusedMainTaskIds,
+  computeUndatedProjectSubtreeIds,
+} from "@/lib/timelineUtils";
 
 const SHOW_CRITICAL_PATH_STORAGE_KEY = "abundance-show-critical-path";
+const BOARD_TAB_STORAGE_KEY = "abundance-board-tab";
+const SHOW_COMPLETED_MAIN_STORAGE_KEY = "abundance-show-completed-main";
+
+function readBoardTab(): "board" | "completed" {
+  if (typeof window === "undefined") return "board";
+  try {
+    const v = localStorage.getItem(BOARD_TAB_STORAGE_KEY);
+    return v === "completed" ? "completed" : "board";
+  } catch {
+    return "board";
+  }
+}
+
+function readShowCompletedMain(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const v = localStorage.getItem(SHOW_COMPLETED_MAIN_STORAGE_KEY);
+    if (v === null) return false;
+    return v === "1" || v === "true";
+  } catch {
+    return false;
+  }
+}
 
 function readShowCriticalPath(): boolean {
   if (typeof window === "undefined") return true;
@@ -40,6 +70,16 @@ function readShowCriticalPath(): boolean {
     return v === "1" || v === "true";
   } catch {
     return true;
+  }
+}
+
+function readProjectFocusedView(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const v = localStorage.getItem(PROJECT_FOCUSED_VIEW_STORAGE_KEY);
+    return v === "1" || v === "true";
+  } catch {
+    return false;
   }
 }
 
@@ -70,7 +110,14 @@ export default function GTDBoard() {
   } = useTasks();
 
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [boardTab, setBoardTab] = useState<"board" | "completed">(readBoardTab);
+  const [showCompletedOnMain, setShowCompletedOnMain] = useState(
+    readShowCompletedMain
+  );
   const [showCriticalPath, setShowCriticalPath] = useState(readShowCriticalPath);
+  const [projectFocusedView, setProjectFocusedView] = useState(
+    readProjectFocusedView
+  );
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   /** Task id currently hovered while dragging; timer starts when this changes. */
@@ -86,6 +133,14 @@ export default function GTDBoard() {
   const selectedTask = useMemo(
     () => tasks.find((t) => t._id === selectedTaskId) || null,
     [tasks, selectedTaskId]
+  );
+
+  const selectedTaskSection = useMemo(
+    () =>
+      selectedTask
+        ? sections.find((s) => s._id === selectedTask.sectionId) ?? null
+        : null,
+    [sections, selectedTask]
   );
 
   const activeTask = useMemo(
@@ -104,6 +159,36 @@ export default function GTDBoard() {
     }
   }, [showCriticalPath]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(BOARD_TAB_STORAGE_KEY, boardTab);
+    } catch {
+      /* ignore */
+    }
+  }, [boardTab]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        SHOW_COMPLETED_MAIN_STORAGE_KEY,
+        showCompletedOnMain ? "1" : "0"
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [showCompletedOnMain]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        PROJECT_FOCUSED_VIEW_STORAGE_KEY,
+        projectFocusedView ? "1" : "0"
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [projectFocusedView]);
+
   const activeTaskSection = useMemo(
     () =>
       activeTask
@@ -116,6 +201,22 @@ export default function GTDBoard() {
     () => sections.find((s) => s.type === "project"),
     [sections]
   );
+
+  const projectSectionTasks = useMemo(
+    () =>
+      projectSection
+        ? tasks.filter((t) => t.sectionId === projectSection._id)
+        : [],
+    [tasks, projectSection?._id]
+  );
+
+  const projectFocusSets = useMemo(() => {
+    if (!projectSection || !projectFocusedView) return null;
+    return {
+      mainIds: computeProjectFocusedMainTaskIds(projectSectionTasks, projectSection),
+      undatedIds: computeUndatedProjectSubtreeIds(projectSectionTasks),
+    };
+  }, [projectSection, projectFocusedView, projectSectionTasks]);
 
   const pendingDeleteMeta = useMemo(() => {
     if (!pendingDeleteId) return null;
@@ -131,9 +232,31 @@ export default function GTDBoard() {
     return { task, totalRemoving: ids.length };
   }, [pendingDeleteId, tasks]);
 
-  const handleDeleteRequest = useCallback((id: string) => {
-    setPendingDeleteId(id);
-  }, []);
+  const handleDeleteRequest = useCallback(
+    (id: string) => {
+      const task = tasks.find((t) => t._id === id);
+      if (!task) return;
+
+      const collectIds = (taskId: string): string[] => {
+        const childIds = tasks
+          .filter((t) => t.parentId === taskId)
+          .flatMap((t) => collectIds(t._id));
+        return [taskId, ...childIds];
+      };
+      const totalRemoving = collectIds(id).length;
+
+      if (totalRemoving > 1) {
+        setPendingDeleteId(id);
+        return;
+      }
+      if (!taskHasAnyUserData(task)) {
+        void deleteTask(id);
+        return;
+      }
+      setPendingDeleteId(id);
+    },
+    [tasks, deleteTask]
+  );
 
   const handleConfirmDelete = useCallback(async () => {
     if (!pendingDeleteId) return;
@@ -361,30 +484,124 @@ export default function GTDBoard() {
               justifyContent: "flex-end",
             }}
           >
-            {projectSection && (
+            <div
+              style={{
+                display: "flex",
+                borderRadius: 8,
+                border: "1px solid var(--border-color)",
+                overflow: "hidden",
+              }}
+            >
               <button
                 type="button"
-                onClick={() => setShowCriticalPath((v) => !v)}
-                aria-pressed={showCriticalPath}
+                onClick={() => setBoardTab("board")}
+                aria-pressed={boardTab === "board"}
+                style={{
+                  fontSize: 13,
+                  padding: "6px 14px",
+                  border: "none",
+                  background:
+                    boardTab === "board" ? "var(--bg-tertiary)" : "transparent",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
+                Board
+              </button>
+              <button
+                type="button"
+                onClick={() => setBoardTab("completed")}
+                aria-pressed={boardTab === "completed"}
+                style={{
+                  fontSize: 13,
+                  padding: "6px 14px",
+                  border: "none",
+                  borderLeft: "1px solid var(--border-color)",
+                  background:
+                    boardTab === "completed"
+                      ? "var(--bg-tertiary)"
+                      : "transparent",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
+                Completed
+              </button>
+            </div>
+            {boardTab === "board" && (
+              <button
+                type="button"
+                onClick={() => setShowCompletedOnMain((v) => !v)}
+                aria-pressed={showCompletedOnMain}
                 title={
-                  showCriticalPath
-                    ? "Hide critical path graph"
-                    : "Show critical path graph"
+                  showCompletedOnMain
+                    ? "Hide completed tasks on the board"
+                    : "Show completed tasks on the board"
                 }
                 style={{
                   fontSize: 13,
                   padding: "6px 12px",
                   borderRadius: 6,
                   border: "1px solid var(--border-color)",
-                  background: showCriticalPath
+                  background: showCompletedOnMain
                     ? "var(--bg-tertiary)"
-                    : "rgba(75, 156, 245, 0.12)",
+                    : "transparent",
                   color: "var(--text-secondary)",
                   cursor: "pointer",
                 }}
               >
-                {showCriticalPath ? "Hide graph" : "Show graph"}
+                {showCompletedOnMain ? "Hide completed" : "Show completed"}
               </button>
+            )}
+            {projectSection && boardTab === "board" && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setProjectFocusedView((v) => !v)}
+                  aria-pressed={projectFocusedView}
+                  title={
+                    projectFocusedView
+                      ? "Show all project tasks and full timeline"
+                      : "Show only tasks due or starting soon; unscheduled roots listed separately"
+                  }
+                  style={{
+                    fontSize: 13,
+                    padding: "6px 12px",
+                    borderRadius: 6,
+                    border: "1px solid var(--border-color)",
+                    background: projectFocusedView
+                      ? "var(--bg-tertiary)"
+                      : "transparent",
+                    color: "var(--text-secondary)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {projectFocusedView ? "Focused (on)" : "Focused view"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCriticalPath((v) => !v)}
+                  aria-pressed={showCriticalPath}
+                  title={
+                    showCriticalPath
+                      ? "Hide critical path graph"
+                      : "Show critical path graph"
+                  }
+                  style={{
+                    fontSize: 13,
+                    padding: "6px 12px",
+                    borderRadius: 6,
+                    border: "1px solid var(--border-color)",
+                    background: showCriticalPath
+                      ? "var(--bg-tertiary)"
+                      : "rgba(75, 156, 245, 0.12)",
+                    color: "var(--text-secondary)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {showCriticalPath ? "Hide graph" : "Show graph"}
+                </button>
+              </>
             )}
             <button
               type="button"
@@ -408,15 +625,17 @@ export default function GTDBoard() {
           </div>
         </header>
 
-        {projectSection && showCriticalPath && (
+        {boardTab === "board" && projectSection && showCriticalPath && (
           <CriticalPathTimeline
             section={projectSection}
             tasks={tasks}
             onSelectTask={(id) => setSelectedTaskId(id)}
+            isFocusedView={projectFocusedView}
+            onExitFocusedView={() => setProjectFocusedView(false)}
           />
         )}
 
-        {projectSection && !showCriticalPath && (
+        {boardTab === "board" && projectSection && !showCriticalPath && (
           <div style={{ margin: "0 24px 12px" }}>
             <button
               type="button"
@@ -440,53 +659,68 @@ export default function GTDBoard() {
 
         {/* Content */}
         <div style={{ padding: "8px 0" }}>
-          <DndContext
-            sensors={sensors}
-            collisionDetection={nestStripCollision}
-            onDragStart={handleDragStart}
-            onDragOver={handleDragOver}
-            onDragCancel={handleDragCancel}
-            onDragEnd={handleDragEnd}
-            measuring={{
-              droppable: { strategy: MeasuringStrategy.Always },
-            }}
-          >
-            {sections.map((section) => (
-              <SectionView
-                key={section._id}
-                section={section}
-                tasks={tasks}
-                onUpdateSection={updateSection}
-                onUpdateTask={updateTask}
-                onDeleteTask={handleDeleteRequest}
-                onCreateTask={handleCreateTask}
-                onCreateTaskAfter={handleCreateTaskAfter}
-                selectedTaskId={selectedTaskId}
-                onSelectTask={setSelectedTaskId}
-              />
-            ))}
-
-            <DragOverlay dropAnimation={null}>
-              {activeTask ? (
-                <TaskRow
-                  task={activeTask}
-                  childCount={0}
-                  onUpdate={() => {}}
-                  onDelete={() => {}}
-                  onAddChild={() => {}}
-                  onToggleCollapse={() => {}}
-                  onSelect={() => {}}
-                  isSelected={false}
-                  isDragOverlay
-                  sectionSequentialForRoot={
-                    activeTask.parentId === null
-                      ? activeTaskSection?.isSequential ?? false
-                      : undefined
-                  }
+          {boardTab === "completed" ? (
+            <CompletedTasksView
+              sections={sections}
+              tasks={tasks}
+              onUpdateTask={updateTask}
+              onSelectTask={setSelectedTaskId}
+            />
+          ) : (
+            <DndContext
+              sensors={sensors}
+              collisionDetection={nestStripCollision}
+              onDragStart={handleDragStart}
+              onDragOver={handleDragOver}
+              onDragCancel={handleDragCancel}
+              onDragEnd={handleDragEnd}
+              measuring={{
+                droppable: { strategy: MeasuringStrategy.Always },
+              }}
+            >
+              {sections.map((section) => (
+                <SectionView
+                  key={section._id}
+                  section={section}
+                  tasks={tasks}
+                  onUpdateSection={updateSection}
+                  onUpdateTask={updateTask}
+                  onDeleteTask={handleDeleteRequest}
+                  onCreateTask={handleCreateTask}
+                  onCreateTaskAfter={handleCreateTaskAfter}
+                  selectedTaskId={selectedTaskId}
+                  onSelectTask={setSelectedTaskId}
+                  showCompletedOnMain={showCompletedOnMain}
+                  projectFocusedView={projectFocusedView}
+                  focusedProjectMainIds={projectFocusSets?.mainIds ?? null}
+                  focusedProjectUndatedIds={projectFocusSets?.undatedIds ?? null}
+                  onExitProjectFocusedView={() => setProjectFocusedView(false)}
                 />
-              ) : null}
-            </DragOverlay>
-          </DndContext>
+              ))}
+
+              <DragOverlay dropAnimation={null}>
+                {activeTask ? (
+                  <TaskRow
+                    task={activeTask}
+                    childCount={0}
+                    onUpdate={() => {}}
+                    onDelete={() => {}}
+                    onAddChild={() => {}}
+                    onToggleCollapse={() => {}}
+                    onSelect={() => {}}
+                    isSelected={false}
+                    isDragOverlay
+                    sectionSequentialForRoot={
+                      activeTask.parentId === null
+                        ? activeTaskSection?.isSequential ?? false
+                        : undefined
+                    }
+                    sectionType={activeTaskSection?.type}
+                  />
+                ) : null}
+              </DragOverlay>
+            </DndContext>
+          )}
         </div>
       </div>
 
@@ -495,6 +729,7 @@ export default function GTDBoard() {
         <TaskDetailPanel
           key={selectedTask._id}
           task={selectedTask}
+          section={selectedTaskSection}
           onUpdate={updateTask}
           onClose={() => setSelectedTaskId(null)}
         />

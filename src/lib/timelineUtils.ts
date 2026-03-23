@@ -89,6 +89,39 @@ export function addDays(d: Date, days: number): Date {
   return new Date(d.getTime() + days * MS_DAY);
 }
 
+/** Critical path "focused" view: include bars starting within this many days, or that ended recently. */
+export const FOCUS_WINDOW_DAYS = 14;
+
+/**
+ * True when a Gantt bar should show in focused view: overlaps [today, today+FOCUS_WINDOW_DAYS],
+ * or ended on/before today but not before the lookback window (already due / recently completed).
+ */
+export function taskRangeInFocusedWindow(
+  r: TaskDateRange,
+  now: Date = new Date()
+): boolean {
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const endOfToday = new Date(startOfToday.getTime() + MS_DAY - 1);
+  const windowEnd = addDays(startOfToday, FOCUS_WINDOW_DAYS);
+  windowEnd.setHours(23, 59, 59, 999);
+  const lookbackStart = addDays(startOfToday, -FOCUS_WINDOW_DAYS);
+
+  const { start, end } = r;
+  if (
+    end.getTime() >= startOfToday.getTime() &&
+    start.getTime() <= windowEnd.getTime()
+  ) {
+    return true;
+  }
+  if (
+    end.getTime() <= endOfToday.getTime() &&
+    end.getTime() >= lookbackStart.getTime()
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function startOfWeekMonday(d: Date): Date {
   const x = new Date(d);
   const day = x.getDay();
@@ -511,4 +544,62 @@ export function buildProjectRanges(
     rangeStart: new Date(minT - padMs),
     rangeEnd: new Date(maxT + padMs),
   };
+}
+
+/** localStorage key for project focused view (board list + Gantt). */
+export const PROJECT_FOCUSED_VIEW_STORAGE_KEY = "abundance-critical-path-focused";
+
+/**
+ * Task IDs for the main list when the project is in focused view (same row rules as the Gantt).
+ * Includes ancestors of any in-window task so the path to the root stays visible.
+ */
+export function computeProjectFocusedMainTaskIds(
+  sectionTasks: TaskItem[],
+  section: Pick<Section, "isSequential" | "topLevelSort">
+): Set<string> {
+  const { ranges } = buildProjectRanges(sectionTasks, section);
+  const taskById = new Map(sectionTasks.map((t) => [t._id, t]));
+  const rangeMatch = new Set<string>();
+  for (const r of ranges) {
+    if (!(r.task.parentId !== null || hasExplicitStartDate(r.task))) continue;
+    if (!taskRangeInFocusedWindow(r)) continue;
+    rangeMatch.add(r.task._id);
+  }
+  const out = new Set<string>();
+  for (const id of rangeMatch) {
+    let cur = taskById.get(id);
+    while (cur) {
+      out.add(cur._id);
+      if (!cur.parentId) break;
+      cur = taskById.get(cur.parentId);
+    }
+  }
+  return out;
+}
+
+/**
+ * Tasks whose top-level root has no start and no due date (entire subtree — shown in the Unscheduled group when focused).
+ */
+export function computeUndatedProjectSubtreeIds(sectionTasks: TaskItem[]): Set<string> {
+  const byId = new Map(sectionTasks.map((t) => [t._id, t]));
+  function rootOf(t: TaskItem): TaskItem {
+    let cur = t;
+    while (cur.parentId) {
+      const p = byId.get(cur.parentId);
+      if (!p) break;
+      cur = p;
+    }
+    return cur;
+  }
+  const undatedRootIds = new Set<string>();
+  for (const t of sectionTasks) {
+    if (t.parentId === null && !t.startDate?.trim() && !t.dueDate?.trim()) {
+      undatedRootIds.add(t._id);
+    }
+  }
+  const out = new Set<string>();
+  for (const t of sectionTasks) {
+    if (undatedRootIds.has(rootOf(t)._id)) out.add(t._id);
+  }
+  return out;
 }

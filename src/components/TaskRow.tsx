@@ -3,8 +3,15 @@
 import React, { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { TaskItem } from "@/lib/types";
+import { TaskItem, SectionType } from "@/lib/types";
+import {
+  computeNextDueDate,
+  formatYmd,
+  parseDueDateTimeLocal,
+  formatDueTimeDisplay,
+} from "@/lib/recurrence";
 import { MAX_TASK_DEPTH } from "@/lib/constants";
+import { formatTaskUrlLabel, normalizeTaskHref } from "@/lib/taskUrls";
 import {
   ChevronRight,
   ChevronDown,
@@ -32,6 +39,8 @@ interface Props {
   isDragOverlay?: boolean;
   /** For root tasks: sequential arrow comes from the section (top-level list order). */
   sectionSequentialForRoot?: boolean;
+  /** Used to apply recurring completion (advance due date + history). */
+  sectionType?: SectionType;
 }
 
 export default function TaskRow({
@@ -46,6 +55,7 @@ export default function TaskRow({
   isSelected,
   isDragOverlay = false,
   sectionSequentialForRoot,
+  sectionType,
 }: Props) {
   const [isEditing, setIsEditing] = useState(!task.title);
   const [editValue, setEditValue] = useState(task.title);
@@ -127,9 +137,13 @@ export default function TaskRow({
 
   const indent = task.depth * 28;
 
-  const hasDueDate = task.dueDate;
+  const hasDueDate = Boolean(task.dueDate?.trim());
+  const showScheduleOrDueBadge =
+    hasDueDate ||
+    (sectionType === "recurring" && Boolean(task.dueTime?.trim()));
+  const dueAt = parseDueDateTimeLocal(task.dueDate, task.dueTime);
   const isOverdue =
-    hasDueDate && new Date(task.dueDate!) < new Date() && !task.completed;
+    Boolean(dueAt) && dueAt!.getTime() < Date.now() && !task.completed;
 
   const formatDueDate = (date: string) => {
     const d = new Date(date);
@@ -143,6 +157,18 @@ export default function TaskRow({
     if (diff < 0) return `${Math.abs(Math.floor(diff))}d overdue`;
     return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   };
+
+  const dueDateLabel = (() => {
+    if (task.dueDate?.trim()) {
+      const base = formatDueDate(task.dueDate);
+      const tm = formatDueTimeDisplay(task.dueTime);
+      return tm ? `${base} · ${tm}` : base;
+    }
+    if (sectionType === "recurring" && task.dueTime?.trim()) {
+      return formatDueTimeDisplay(task.dueTime);
+    }
+    return "";
+  })();
 
   const formatTime = (est: number, unit: string) => {
     return `${est}${unit.charAt(0)}`;
@@ -158,6 +184,30 @@ export default function TaskRow({
       : pr === "low"
         ? { background: "var(--bg-tertiary)", color: "var(--text-muted)" }
         : { background: "rgba(251,191,36,0.12)", color: "var(--accent-amber)" };
+
+  const handleToggleComplete = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const freq = task.repeatFrequency ?? "none";
+    if (
+      sectionType === "recurring" &&
+      freq !== "none"
+    ) {
+      if (task.completed) {
+        onUpdate({ _id: task._id, completed: false });
+        return;
+      }
+      const today = formatYmd(new Date());
+      const next = computeNextDueDate(task, new Date());
+      onUpdate({
+        _id: task._id,
+        completed: false,
+        dueDate: next,
+        completionHistory: [...(task.completionHistory ?? []), today],
+      });
+      return;
+    }
+    onUpdate({ _id: task._id, completed: !task.completed });
+  };
 
   return (
     <div
@@ -251,10 +301,7 @@ export default function TaskRow({
             {/* Completion circle — sized to match title line, high contrast */}
               <button
                 type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onUpdate({ _id: task._id, completed: !task.completed });
-                }}
+                onClick={handleToggleComplete}
                 className="task-row-checkbox"
                 style={{
                   width: 22,
@@ -455,7 +502,7 @@ export default function TaskRow({
                 </span>
               ))}
 
-              {hasDueDate && (
+              {showScheduleOrDueBadge && (
                 <span
                   style={{
                     fontSize: 11,
@@ -464,34 +511,14 @@ export default function TaskRow({
                     gap: 3,
                     color: isOverdue
                       ? "var(--accent-red)"
-                      : formatDueDate(task.dueDate!) === "Today"
+                      : hasDueDate && formatDueDate(task.dueDate!) === "Today"
                         ? "var(--accent-amber)"
                         : "var(--text-muted)",
                   }}
                 >
                   <Calendar size={11} />
-                  {formatDueDate(task.dueDate!)}
+                  {dueDateLabel}
                 </span>
-              )}
-
-              {task.url && (
-                <a
-                  href={task.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    color: "var(--accent-blue)",
-                    display: "flex",
-                    alignItems: "center",
-                  }}
-                  title={task.url}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-                    <path d="M6.5 9.5a3 3 0 004.24 0l1.5-1.5a3 3 0 00-4.24-4.24L7 4.76" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                    <path d="M9.5 6.5a3 3 0 00-4.24 0L3.76 8a3 3 0 004.24 4.24L9 11.24" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                  </svg>
-                </a>
               )}
             </div>
 
@@ -566,6 +593,26 @@ export default function TaskRow({
                 </button>
             </div>
           </div>
+
+          {(task.urls ?? []).filter((u) => u.trim()).length > 0 && (
+            <div className="task-row-link-wrap task-row-links">
+              {(task.urls ?? [])
+                .filter((u) => u.trim())
+                .map((u, i) => (
+                  <a
+                    key={`${task._id}-link-${i}-${u.slice(0, 24)}`}
+                    href={normalizeTaskHref(u)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="task-row-link"
+                    title={u.trim()}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {formatTaskUrlLabel(u)}
+                  </a>
+                ))}
+            </div>
+          )}
 
           {/* Notes under the title row */}
           {task.notes?.trim() && (

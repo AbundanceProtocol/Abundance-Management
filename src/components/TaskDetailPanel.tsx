@@ -1,23 +1,28 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { TaskItem, TimeUnit, TaskPriority } from "@/lib/types";
+import { TaskItem, TimeUnit, TaskPriority, Section, RepeatFrequency } from "@/lib/types";
 import { Clock, Calendar, Flag, Link, FileText, ArrowDownRight } from "./Icons";
 
 interface Props {
   task: TaskItem;
+  /** Section for the task (recurrence UI only in recurring section). */
+  section: Section | null;
   onUpdate: (task: Partial<TaskItem> & { _id: string }) => void;
   onClose: () => void;
 }
 
+const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
 export default function TaskDetailPanel({
   task,
+  section,
   onUpdate,
   onClose,
 }: Props) {
   const [title, setTitle] = useState(task.title);
   const [notes, setNotes] = useState(task.notes);
-  const [url, setUrl] = useState(task.url);
+  const [urls, setUrls] = useState<string[]>(() => [...(task.urls ?? [])]);
   const [timeEstimate, setTimeEstimate] = useState<string>(
     task.timeEstimate?.toString() || ""
   );
@@ -25,20 +30,43 @@ export default function TaskDetailPanel({
   const [priority, setPriority] = useState<TaskPriority>(task.priority ?? "medium");
   const [startDate, setStartDate] = useState(task.startDate || "");
   const [dueDate, setDueDate] = useState(task.dueDate || "");
+  const [dueTime, setDueTime] = useState(() =>
+    task.dueTime?.trim() ? task.dueTime : ""
+  );
+  const [repeatFrequency, setRepeatFrequency] = useState<RepeatFrequency>(
+    task.repeatFrequency ?? "none"
+  );
+  const [repeatWeekdays, setRepeatWeekdays] = useState<number[]>(
+    () => task.repeatWeekdays?.length ? [...task.repeatWeekdays] : [new Date().getDay()]
+  );
 
   useEffect(() => {
     setTitle(task.title);
     setNotes(task.notes);
-    setUrl(task.url);
+    setUrls([...(task.urls ?? [])]);
     setTimeEstimate(task.timeEstimate?.toString() || "");
     setTimeUnit(task.timeUnit);
     setPriority(task.priority ?? "medium");
     setStartDate(task.startDate || "");
     setDueDate(task.dueDate || "");
+    setRepeatFrequency(task.repeatFrequency ?? "none");
+    setRepeatWeekdays(
+      task.repeatWeekdays?.length ? [...task.repeatWeekdays] : [new Date().getDay()]
+    );
   }, [task]);
 
   const save = (partial: Partial<TaskItem>) => {
     onUpdate({ _id: task._id, ...partial });
+  };
+
+  const commitUrls = () => {
+    const cleaned = urls.map((u) => u.trim()).filter(Boolean);
+    const prev = (task.urls ?? []).map((u) => u.trim()).filter(Boolean);
+    const same =
+      cleaned.length === prev.length &&
+      cleaned.every((u, i) => u === prev[i]);
+    if (!same) save({ urls: cleaned });
+    setUrls(cleaned);
   };
 
   return (
@@ -233,26 +261,254 @@ export default function TaskDetailPanel({
             type="date"
             value={dueDate}
             onChange={(e) => {
-              setDueDate(e.target.value);
-              save({ dueDate: e.target.value || null });
+              const v = e.target.value;
+              setDueDate(v);
+              if (!v) {
+                if (section?.type === "todo") {
+                  setDueTime("");
+                  save({ dueDate: null, dueTime: null });
+                } else {
+                  save({ dueDate: null });
+                }
+              } else {
+                save({ dueDate: v });
+              }
             }}
             style={{ width: "100%" }}
           />
+          {section?.type === "todo" && (
+            <div style={{ marginTop: 10 }}>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 12,
+                  color: "var(--text-secondary)",
+                  marginBottom: 6,
+                }}
+              >
+                <Clock size={14} /> Due time
+              </label>
+              <input
+                type="time"
+                value={dueTime}
+                disabled={!dueDate.trim()}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setDueTime(v);
+                  save({ dueTime: v.trim() ? v : null });
+                }}
+                style={{
+                  width: "100%",
+                  padding: "8px 10px",
+                  borderRadius: 6,
+                  opacity: dueDate.trim() ? 1 : 0.5,
+                }}
+              />
+              {!dueDate.trim() && (
+                <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "6px 0 0", lineHeight: 1.4 }}>
+                  Set a due date to enable due time.
+                </p>
+              )}
+            </div>
+          )}
+          {section?.type === "recurring" && repeatFrequency === "monthly" && (
+            <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "8px 0 0", lineHeight: 1.4 }}>
+              Monthly repeats use the <strong>day of month</strong> from this due date.
+            </p>
+          )}
         </div>
 
-        {/* URL */}
+        {section?.type === "recurring" && (
+          <div>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 12,
+                color: "var(--text-secondary)",
+                marginBottom: 6,
+              }}
+            >
+              <Clock size={14} /> Scheduled time
+            </label>
+            <input
+              type="time"
+              value={dueTime}
+              onChange={(e) => {
+                const v = e.target.value;
+                setDueTime(v);
+                save({ dueTime: v.trim() ? v : null });
+              }}
+              style={{
+                width: "100%",
+                padding: "8px 10px",
+                borderRadius: 6,
+              }}
+            />
+            <p
+              style={{
+                fontSize: 11,
+                color: "var(--text-muted)",
+                margin: "6px 0 0",
+                lineHeight: 1.4,
+              }}
+            >
+              When this runs on each occurrence. Does not require a due date.
+            </p>
+          </div>
+        )}
+
+        {/* Recurrence (recurring section only) */}
+        {section?.type === "recurring" && (
+          <div>
+            <label
+              style={{
+                display: "block",
+                fontSize: 12,
+                color: "var(--text-secondary)",
+                marginBottom: 6,
+              }}
+            >
+              Repeats
+            </label>
+            <select
+              value={repeatFrequency}
+              onChange={(e) => {
+                const v = e.target.value as RepeatFrequency;
+                setRepeatFrequency(v);
+                if (v === "none") {
+                  save({ repeatFrequency: "none", repeatWeekdays: [] });
+                } else if (v === "weekly") {
+                  const next =
+                    repeatWeekdays.length > 0
+                      ? repeatWeekdays
+                      : [new Date().getDay()];
+                  setRepeatWeekdays(next);
+                  save({ repeatFrequency: v, repeatWeekdays: next });
+                } else {
+                  save({ repeatFrequency: v, repeatWeekdays: [] });
+                }
+              }}
+              style={{ width: "100%", padding: "8px 10px", borderRadius: 6 }}
+            >
+              <option value="none">Does not repeat</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+            {repeatFrequency === "weekly" && (
+              <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {WEEKDAY_LABELS.map((label, day) => {
+                  const on = repeatWeekdays.includes(day);
+                  return (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => {
+                        const next = on
+                          ? repeatWeekdays.filter((d) => d !== day)
+                          : [...repeatWeekdays, day].sort((a, b) => a - b);
+                        setRepeatWeekdays(next);
+                        save({
+                          repeatFrequency: "weekly",
+                          repeatWeekdays: next.length ? next : [day],
+                        });
+                      }}
+                      style={{
+                        fontSize: 11,
+                        padding: "6px 8px",
+                        borderRadius: 6,
+                        border: `1px solid ${on ? "var(--accent-blue)" : "var(--border-color)"}`,
+                        background: on ? "rgba(59, 130, 246, 0.15)" : "var(--bg-tertiary)",
+                        color: on ? "var(--accent-blue)" : "var(--text-muted)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Links */}
         <div>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 }}>
-            <Link size={14} /> URL
+            <Link size={14} /> Links
           </label>
-          <input
-            type="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            onBlur={() => save({ url })}
-            placeholder="https://..."
-            style={{ width: "100%" }}
-          />
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {urls.map((u, i) => (
+              <div
+                key={i}
+                style={{ display: "flex", gap: 8, alignItems: "center" }}
+              >
+                <input
+                  type="url"
+                  value={u}
+                  onChange={(e) => {
+                    const next = [...urls];
+                    next[i] = e.target.value;
+                    setUrls(next);
+                  }}
+                  onBlur={commitUrls}
+                  placeholder="https://..."
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    padding: "8px 10px",
+                    borderRadius: 6,
+                    border: "1px solid var(--border-color)",
+                    background: "var(--bg-primary)",
+                    color: "var(--text-primary)",
+                    boxSizing: "border-box",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = urls.filter((_, j) => j !== i);
+                    setUrls(next);
+                    const cleaned = next.map((x) => x.trim()).filter(Boolean);
+                    save({ urls: cleaned });
+                  }}
+                  style={{
+                    flexShrink: 0,
+                    padding: "6px 10px",
+                    fontSize: 12,
+                    borderRadius: 6,
+                    border: "1px solid var(--border-color)",
+                    background: "var(--bg-tertiary)",
+                    color: "var(--text-muted)",
+                    cursor: "pointer",
+                  }}
+                  title="Remove link"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setUrls((prev) => [...prev, ""])}
+              style={{
+                alignSelf: "flex-start",
+                padding: "6px 12px",
+                fontSize: 12,
+                borderRadius: 6,
+                border: "1px dashed var(--border-color)",
+                background: "transparent",
+                color: "var(--accent-blue)",
+                cursor: "pointer",
+              }}
+            >
+              + Add link
+            </button>
+          </div>
         </div>
 
         {/* Critical Path */}

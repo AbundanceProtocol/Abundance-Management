@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Section, TaskItem, NewTask, TimeUnit, TaskPriority } from "./types";
+import { Section, TaskItem, NewTask, TimeUnit, TaskPriority, SectionType } from "./types";
 
 export function useSections() {
   const [sections, setSections] = useState<Section[]>([]);
@@ -58,10 +58,16 @@ export function useTasks() {
   }, [fetchTasks]);
 
   const createTask = useCallback(
-    async (sectionId: string, parentId: string | null, depth: number) => {
+    async (
+      sectionId: string,
+      parentId: string | null,
+      depth: number,
+      sectionType?: SectionType
+    ) => {
       const siblings = tasks.filter(
         (t) => t.sectionId === sectionId && t.parentId === parentId
       );
+      const isRecurring = sectionType === "recurring";
       const newTask: NewTask = {
         sectionId,
         parentId,
@@ -73,13 +79,20 @@ export function useTasks() {
         timeEstimate: null,
         timeUnit: "days" as TimeUnit,
         notes: "",
-        url: "",
+        urls: [],
         startDate: null,
         dueDate: null,
+        dueTime: null,
         isCriticalPath: false,
         isSequential: false,
         collapsed: false,
         tags: [],
+        ...(isRecurring
+          ? {
+              repeatFrequency: "weekly" as const,
+              repeatWeekdays: [new Date().getDay()],
+            }
+          : { repeatFrequency: "none" as const }),
       };
 
       const res = await fetch("/api/tasks", {
@@ -153,7 +166,7 @@ export function useTasks() {
   );
 
   const createTaskAfter = useCallback(
-    async (afterTask: TaskItem) => {
+    async (afterTask: TaskItem, sectionType?: SectionType) => {
       const { sectionId, parentId, depth } = afterTask;
       const siblings = tasks
         .filter((t) => t.sectionId === sectionId && t.parentId === parentId)
@@ -174,6 +187,7 @@ export function useTasks() {
         await reorderTasks(shiftUpdates);
       }
 
+      const isRecurring = sectionType === "recurring";
       const newTask: NewTask = {
         sectionId,
         parentId,
@@ -185,13 +199,20 @@ export function useTasks() {
         timeEstimate: null,
         timeUnit: "days" as TimeUnit,
         notes: "",
-        url: "",
+        urls: [],
         startDate: null,
         dueDate: null,
+        dueTime: null,
         isCriticalPath: false,
         isSequential: false,
         collapsed: false,
         tags: [],
+        ...(isRecurring
+          ? {
+              repeatFrequency: "weekly" as const,
+              repeatWeekdays: [new Date().getDay()],
+            }
+          : { repeatFrequency: "none" as const }),
       };
 
       const res = await fetch("/api/tasks", {

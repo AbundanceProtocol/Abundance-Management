@@ -11,6 +11,8 @@ import {
   formatMonthShort,
   formatQuarter,
   addDays,
+  taskRangeInFocusedWindow,
+  FOCUS_WINDOW_DAYS,
 } from "@/lib/timelineUtils";
 import { ChevronDown, ChevronRight } from "./Icons";
 
@@ -138,12 +140,17 @@ interface Props {
   section: Section;
   tasks: TaskItem[];
   onSelectTask: (id: string) => void;
+  /** Controlled from the board header (same as project task list). Named `isFocusedView` to avoid clashing with any local `focusedView` state. */
+  isFocusedView: boolean;
+  onExitFocusedView?: () => void;
 }
 
 export default function CriticalPathTimeline({
   section,
   tasks,
   onSelectTask,
+  isFocusedView,
+  onExitFocusedView,
 }: Props) {
   const allSectionTasks = useMemo(
     () => tasksInSection(tasks, section._id),
@@ -171,19 +178,52 @@ export default function CriticalPathTimeline({
     return new Set(visible.map((t) => t._id));
   }, [allSectionTasks, chartCollapsedIds, topLevelSort]);
 
+  const projectRangesBuilt = useMemo(
+    () => buildProjectRanges(allSectionTasks, section),
+    [allSectionTasks, section]
+  );
+
+  const chartVisibleRanges = useMemo(
+    () =>
+      projectRangesBuilt.ranges.filter(
+        (r) =>
+          visibleTaskIds.has(r.task._id) &&
+          (r.task.parentId !== null || hasExplicitStartDate(r.task))
+      ),
+    [projectRangesBuilt.ranges, visibleTaskIds]
+  );
+
   const { ranges, rangeStart, rangeEnd } = useMemo(() => {
-    const full = buildProjectRanges(allSectionTasks, section);
-    const visibleRanges = full.ranges.filter(
-      (r) =>
-        visibleTaskIds.has(r.task._id) &&
-        (r.task.parentId !== null || hasExplicitStartDate(r.task))
+    if (!isFocusedView) {
+      return {
+        ranges: chartVisibleRanges,
+        rangeStart: projectRangesBuilt.rangeStart,
+        rangeEnd: projectRangesBuilt.rangeEnd,
+      };
+    }
+    const focused = chartVisibleRanges.filter((r) =>
+      taskRangeInFocusedWindow(r)
     );
+    if (focused.length === 0) {
+      return {
+        ranges: [],
+        rangeStart: projectRangesBuilt.rangeStart,
+        rangeEnd: projectRangesBuilt.rangeEnd,
+      };
+    }
+    let minT = focused[0].start.getTime();
+    let maxT = focused[0].end.getTime();
+    for (const r of focused) {
+      minT = Math.min(minT, r.start.getTime());
+      maxT = Math.max(maxT, r.end.getTime());
+    }
+    const pad = MS_DAY * 3;
     return {
-      ranges: visibleRanges,
-      rangeStart: full.rangeStart,
-      rangeEnd: full.rangeEnd,
+      ranges: focused,
+      rangeStart: new Date(minT - pad),
+      rangeEnd: new Date(maxT + pad),
     };
-  }, [allSectionTasks, section, section.isSequential, section._id, visibleTaskIds]);
+  }, [isFocusedView, chartVisibleRanges, projectRangesBuilt]);
 
   const totalMs = Math.max(MS_DAY, rangeEnd.getTime() - rangeStart.getTime());
   const totalDays = totalMs / MS_DAY;
@@ -282,6 +322,9 @@ export default function CriticalPathTimeline({
           </div>
           <div style={{ fontSize: 11, color: "rgba(255,255,255,0.65)", marginTop: 2 }}>
             {section.title} · Gantt view (dates & estimates)
+            {isFocusedView
+              ? ` · Focused: due or starting in the next ${FOCUS_WINDOW_DAYS} days`
+              : ""}
           </div>
         </div>
         <div style={{ fontSize: 12, fontWeight: 700, color: "#f87171" }}>
@@ -289,7 +332,7 @@ export default function CriticalPathTimeline({
         </div>
       </div>
 
-      {ranges.length === 0 ? (
+      {chartVisibleRanges.length === 0 ? (
         <div
           style={{
             padding: "24px 16px",
@@ -300,6 +343,34 @@ export default function CriticalPathTimeline({
         >
           Add tasks to <strong>{section.title}</strong> with start dates, due dates, or time
           estimates to see the timeline.
+        </div>
+      ) : isFocusedView && ranges.length === 0 ? (
+        <div
+          style={{
+            padding: "24px 16px",
+            color: "var(--text-muted)",
+            fontSize: 13,
+            textAlign: "center",
+          }}
+        >
+          No tasks in the focused window (due or starting in the next {FOCUS_WINDOW_DAYS} days).{" "}
+          {onExitFocusedView && (
+            <button
+              type="button"
+              onClick={onExitFocusedView}
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--accent-blue)",
+                cursor: "pointer",
+                textDecoration: "underline",
+                padding: 0,
+                fontSize: 13,
+              }}
+            >
+              Show full timeline
+            </button>
+          )}
         </div>
       ) : (
         <div style={{ overflowX: "auto" }}>

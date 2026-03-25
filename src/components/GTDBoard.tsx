@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import {
   DndContext,
   closestCenter,
@@ -29,17 +30,38 @@ import {
   computeSiblingMove,
   computeSiblingMoveAfter,
 } from "@/lib/dndReorder";
-import { NEST_HOVER_MS, NEST_BELOW_PREFIX } from "@/lib/constants";
+import {
+  DUPLICATE_SELECT_TASK_STORAGE_KEY,
+  NEST_HOVER_MS,
+  NEST_BELOW_PREFIX,
+} from "@/lib/constants";
 import { taskHasAnyUserData } from "@/lib/taskUserData";
 import {
   PROJECT_FOCUSED_VIEW_STORAGE_KEY,
   computeProjectFocusedMainTaskIds,
   computeUndatedProjectSubtreeIds,
 } from "@/lib/timelineUtils";
+import {
+  getActiveTodayFocusYmd,
+  msUntilNextTodayFocusReset,
+} from "@/lib/todayFocus";
 
 const SHOW_CRITICAL_PATH_STORAGE_KEY = "abundance-show-critical-path";
 const BOARD_TAB_STORAGE_KEY = "abundance-board-tab";
 const SHOW_COMPLETED_MAIN_STORAGE_KEY = "abundance-show-completed-main";
+const SHOW_TODAY_FOCUS_ONLY_STORAGE_KEY =
+  "abundance-show-today-focus-only";
+
+function readShowTodayFocusOnly(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const v = localStorage.getItem(SHOW_TODAY_FOCUS_ONLY_STORAGE_KEY);
+    if (v === null) return false;
+    return v === "1" || v === "true";
+  } catch {
+    return false;
+  }
+}
 
 function readBoardTab(): "board" | "completed" {
   if (typeof window === "undefined") return "board";
@@ -98,6 +120,7 @@ const nestStripCollision: CollisionDetection = (args) => {
 
 export default function GTDBoard() {
   const router = useRouter();
+  const pathname = usePathname();
   const { sections, loading: sectionsLoading, updateSection } = useSections();
   const {
     tasks,
@@ -107,14 +130,22 @@ export default function GTDBoard() {
     updateTask,
     deleteTask,
     reorderTasks,
+    duplicateTaskWithSubtree,
   } = useTasks();
 
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [duplicateBusy, setDuplicateBusy] = useState(false);
   const [boardTab, setBoardTab] = useState<"board" | "completed">(readBoardTab);
   const [showCompletedOnMain, setShowCompletedOnMain] = useState(
     readShowCompletedMain
   );
   const [showCriticalPath, setShowCriticalPath] = useState(readShowCriticalPath);
+  const [showTodayFocusOnly, setShowTodayFocusOnly] = useState(
+    readShowTodayFocusOnly
+  );
+  const [activeTodayFocusYmd, setActiveTodayFocusYmd] = useState(
+    getActiveTodayFocusYmd()
+  );
   const [projectFocusedView, setProjectFocusedView] = useState(
     readProjectFocusedView
   );
@@ -149,6 +180,21 @@ export default function GTDBoard() {
   );
 
   useEffect(() => {
+    if (pathname !== "/") return;
+    try {
+      const pending = sessionStorage.getItem(
+        DUPLICATE_SELECT_TASK_STORAGE_KEY
+      );
+      if (pending) {
+        sessionStorage.removeItem(DUPLICATE_SELECT_TASK_STORAGE_KEY);
+        setSelectedTaskId(pending);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [pathname]);
+
+  useEffect(() => {
     try {
       localStorage.setItem(
         SHOW_CRITICAL_PATH_STORAGE_KEY,
@@ -158,6 +204,38 @@ export default function GTDBoard() {
       /* ignore quota / private mode */
     }
   }, [showCriticalPath]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        SHOW_TODAY_FOCUS_ONLY_STORAGE_KEY,
+        showTodayFocusOnly ? "1" : "0"
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [showTodayFocusOnly]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let t: number | null = null;
+
+    const schedule = () => {
+      if (cancelled) return;
+      const ms = msUntilNextTodayFocusReset(new Date());
+      t = window.setTimeout(() => {
+        if (cancelled) return;
+        setActiveTodayFocusYmd(getActiveTodayFocusYmd(new Date()));
+        schedule();
+      }, Math.max(0, ms));
+    };
+
+    schedule();
+    return () => {
+      cancelled = true;
+      if (t) window.clearTimeout(t);
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -267,6 +345,20 @@ export default function GTDBoard() {
   const handleCancelDelete = useCallback(() => {
     setPendingDeleteId(null);
   }, []);
+
+  const handleDuplicateTask = useCallback(async () => {
+    if (!selectedTaskId) return;
+    setDuplicateBusy(true);
+    try {
+      const rootId = await duplicateTaskWithSubtree(selectedTaskId);
+      setSelectedTaskId(rootId);
+    } catch (e) {
+      console.error(e);
+      alert(e instanceof Error ? e.message : "Duplicate failed");
+    } finally {
+      setDuplicateBusy(false);
+    }
+  }, [selectedTaskId, duplicateTaskWithSubtree]);
 
   useEffect(() => {
     if (selectedTaskId && !tasks.some((t) => t._id === selectedTaskId)) {
@@ -474,6 +566,12 @@ export default function GTDBoard() {
             >
               GTD + Critical Path Method
             </p>
+            <div style={{ marginTop: 8, display: "flex", gap: 10, fontSize: 13 }}>
+              <strong>Tasks</strong>
+              <Link href="/pages" style={{ color: "var(--accent-blue)" }}>
+                Pages
+              </Link>
+            </div>
           </div>
           <div
             style={{
@@ -551,6 +649,27 @@ export default function GTDBoard() {
                 }}
               >
                 {showCompletedOnMain ? "Hide completed" : "Show completed"}
+              </button>
+            )}
+            {boardTab === "board" && (
+              <button
+                type="button"
+                onClick={() => setShowTodayFocusOnly((v) => !v)}
+                aria-pressed={showTodayFocusOnly}
+                title="Show only tasks selected for today’s focus"
+                style={{
+                  fontSize: 13,
+                  padding: "6px 12px",
+                  borderRadius: 6,
+                  border: "1px solid var(--border-color)",
+                  background: showTodayFocusOnly
+                    ? "var(--bg-tertiary)"
+                    : "transparent",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
+                {showTodayFocusOnly ? "Today’s focus: on" : "Today’s focus"}
               </button>
             )}
             {projectSection && boardTab === "board" && (
@@ -691,6 +810,8 @@ export default function GTDBoard() {
                   selectedTaskId={selectedTaskId}
                   onSelectTask={setSelectedTaskId}
                   showCompletedOnMain={showCompletedOnMain}
+                  showTodayFocusOnly={showTodayFocusOnly}
+                  activeTodayFocusYmd={activeTodayFocusYmd}
                   projectFocusedView={projectFocusedView}
                   focusedProjectMainIds={projectFocusSets?.mainIds ?? null}
                   focusedProjectUndatedIds={projectFocusSets?.undatedIds ?? null}
@@ -730,8 +851,13 @@ export default function GTDBoard() {
           key={selectedTask._id}
           task={selectedTask}
           section={selectedTaskSection}
+          directChildCount={
+            tasks.filter((t) => t.parentId === selectedTask._id).length
+          }
           onUpdate={updateTask}
           onClose={() => setSelectedTaskId(null)}
+          onDuplicate={handleDuplicateTask}
+          duplicateBusy={duplicateBusy}
         />
       )}
 

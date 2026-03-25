@@ -13,6 +13,7 @@ import {
   formatDueTimeDisplay,
 } from "@/lib/recurrence";
 import { ChevronRight, ChevronDown, Plus, Comment, ArrowDownRight } from "./Icons";
+import { isHiddenFromMainBoardByAncestor } from "@/lib/taskSubtree";
 import TaskRow from "./TaskRow";
 import NestDropZone from "./NestDropZone";
 
@@ -38,11 +39,22 @@ interface Props {
   selectedTaskId: string | null;
   onSelectTask: (id: string | null) => void;
   showCompletedOnMain: boolean;
+  /**
+   * When enabled, the main list shows only tasks selected for today's focus
+   * (and their subtasks), with a "day" that resets at 2:00am local time.
+   */
+  showTodayFocusOnly?: boolean;
+  activeTodayFocusYmd?: string;
   /** Project section: matches Gantt focused view. */
   projectFocusedView?: boolean;
   focusedProjectMainIds?: Set<string> | null;
   focusedProjectUndatedIds?: Set<string> | null;
   onExitProjectFocusedView?: () => void;
+  /**
+   * When true, the main list shows only section roots; open a task's page to see its subtree.
+   * @default true
+   */
+  showOnlyRootTasksOnMain?: boolean;
 }
 
 export default function SectionView({
@@ -56,10 +68,13 @@ export default function SectionView({
   selectedTaskId,
   onSelectTask,
   showCompletedOnMain,
+  showTodayFocusOnly = false,
+  activeTodayFocusYmd,
   projectFocusedView = false,
   focusedProjectMainIds = null,
   focusedProjectUndatedIds = null,
   onExitProjectFocusedView,
+  showOnlyRootTasksOnMain = true,
 }: Props) {
   const sectionTasksRaw = useMemo(
     () => tasks.filter((t) => t.sectionId === section._id),
@@ -73,6 +88,7 @@ export default function SectionView({
 
   const { sectionTasksMain, sectionTasksUndated } = useMemo(() => {
     if (
+      showTodayFocusOnly ||
       section.type !== "project" ||
       !projectFocusedView ||
       !focusedProjectMainIds ||
@@ -100,6 +116,14 @@ export default function SectionView({
     baseAfterCompleted,
   ]);
 
+  const sectionTasksUndatedRoots = useMemo(
+    () =>
+      showOnlyRootTasksOnMain
+        ? sectionTasksUndated.filter((t) => t.parentId === null)
+        : sectionTasksUndated,
+    [sectionTasksUndated, showOnlyRootTasksOnMain]
+  );
+
   const recurringDueGroups = useMemo(() => {
     if (section.type !== "recurring") return null;
     const overdue: TaskItem[] = [];
@@ -120,37 +144,125 @@ export default function SectionView({
     return { overdue, today, soon };
   }, [section.type, sectionTasksRaw]);
 
+  const taskByIdMain = useMemo(
+    () => new Map(baseAfterCompleted.map((t) => [t._id, t])),
+    [baseAfterCompleted]
+  );
+
+  const todayFocusVisibleIds = useMemo(() => {
+    if (!showTodayFocusOnly || !activeTodayFocusYmd) return null;
+
+    const tasksForFocus = baseAfterCompleted;
+    const byId = new Map(tasksForFocus.map((t) => [t._id, t]));
+
+    const roots = tasksForFocus.filter(
+      (t) => String(t.todayFocusDate ?? "") === activeTodayFocusYmd
+    );
+    if (roots.length === 0) return new Set<string>();
+
+    const byParent = new Map<string | null, TaskItem[]>();
+    for (const t of tasksForFocus) {
+      const pid = t.parentId;
+      if (!byParent.has(pid)) byParent.set(pid, []);
+      byParent.get(pid)!.push(t);
+    }
+
+    const visible = new Set<string>();
+    const queue: string[] = roots.map((r) => r._id);
+    for (const r of roots) visible.add(r._id);
+
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      const children = byParent.get(id) ?? [];
+      for (const c of children) {
+        if (visible.has(c._id)) continue;
+        visible.add(c._id);
+        queue.push(c._id);
+      }
+    }
+
+    // Include ancestors so nested children have a path in the list.
+    for (const id of Array.from(visible)) {
+      let pid: string | null = byId.get(id)?.parentId ?? null;
+      const seenAnc = new Set<string>();
+      while (pid && !seenAnc.has(pid)) {
+        seenAnc.add(pid);
+        if (byId.has(pid)) visible.add(pid);
+        pid = byId.get(pid)?.parentId ?? null;
+      }
+    }
+
+    return visible;
+  }, [showTodayFocusOnly, activeTodayFocusYmd, baseAfterCompleted]);
+
   const collapsedIds = useMemo(
-    () => new Set(sectionTasksMain.filter((t) => t.collapsed).map((t) => t._id)),
-    [sectionTasksMain]
+    () => {
+      if (showTodayFocusOnly) return new Set<string>();
+      return new Set(sectionTasksMain.filter((t) => t.collapsed).map((t) => t._id));
+    },
+    [sectionTasksMain, showTodayFocusOnly]
   );
 
   const collapsedIdsUndated = useMemo(
     () =>
-      new Set(sectionTasksUndated.filter((t) => t.collapsed).map((t) => t._id)),
-    [sectionTasksUndated]
+      {
+        if (showTodayFocusOnly) return new Set<string>();
+        return new Set(
+          sectionTasksUndatedRoots.filter((t) => t.collapsed).map((t) => t._id)
+        );
+      },
+    [sectionTasksUndatedRoots, showTodayFocusOnly]
   );
 
-  const flatTasks = useMemo(
+  const sectionTasksMainEffective = useMemo(() => {
+    if (!showTodayFocusOnly || !todayFocusVisibleIds) return sectionTasksMain;
+    return sectionTasksMain.filter((t) => todayFocusVisibleIds.has(t._id));
+  }, [sectionTasksMain, showTodayFocusOnly, todayFocusVisibleIds]);
+
+  const flatTasksTree = useMemo(
     () =>
       buildVisibleTaskTree(
-        sectionTasksMain,
+        sectionTasksMainEffective,
         null,
         collapsedIds,
         section.topLevelSort ?? "manual"
       ),
-    [sectionTasksMain, collapsedIds, section.topLevelSort]
+    [sectionTasksMainEffective, collapsedIds, section.topLevelSort]
   );
 
-  const flatTasksUndated = useMemo(
+  const flatTasks = useMemo(
+    () =>
+      flatTasksTree.filter(
+        (t) => !isHiddenFromMainBoardByAncestor(t, taskByIdMain)
+      ),
+    [flatTasksTree, taskByIdMain]
+  );
+
+  const flatTasksUndatedTree = useMemo(
     () =>
       buildVisibleTaskTree(
-        sectionTasksUndated,
+        sectionTasksUndatedRoots,
         null,
         collapsedIdsUndated,
         section.topLevelSort ?? "manual"
       ),
-    [sectionTasksUndated, collapsedIdsUndated, section.topLevelSort]
+    [
+      sectionTasksUndatedRoots,
+      collapsedIdsUndated,
+      section.topLevelSort,
+    ]
+  );
+
+  const flatTasksUndated = useMemo(
+    () =>
+      flatTasksUndatedTree.filter((t) =>
+        showTodayFocusOnly
+          ? todayFocusVisibleIds
+            ? todayFocusVisibleIds.has(t._id)
+            : false
+          : !isHiddenFromMainBoardByAncestor(t, taskByIdMain)
+      ),
+    [flatTasksUndatedTree, taskByIdMain, showTodayFocusOnly, todayFocusVisibleIds]
   );
 
   const taskIds = useMemo(() => flatTasks.map((t) => t._id), [flatTasks]);
@@ -162,28 +274,18 @@ export default function SectionView({
 
   const childCountMap = useMemo(() => {
     const map: Record<string, number> = {};
-    for (const t of sectionTasksMain) {
+    for (const t of baseAfterCompleted) {
       if (t.parentId) {
         map[t.parentId] = (map[t.parentId] || 0) + 1;
       }
     }
     return map;
-  }, [sectionTasksMain]);
-
-  const childCountMapUndated = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (const t of sectionTasksUndated) {
-      if (t.parentId) {
-        map[t.parentId] = (map[t.parentId] || 0) + 1;
-      }
-    }
-    return map;
-  }, [sectionTasksUndated]);
+  }, [baseAfterCompleted]);
 
   const toggleCollapse = (taskId: string) => {
     const t =
       sectionTasksMain.find((x) => x._id === taskId) ??
-      sectionTasksUndated.find((x) => x._id === taskId);
+      sectionTasksUndatedRoots.find((x) => x._id === taskId);
     if (t) {
       onUpdateTask({ _id: taskId, collapsed: !t.collapsed });
     }
@@ -550,6 +652,12 @@ export default function SectionView({
                   onToggleCollapse={() => toggleCollapse(task._id)}
                   onSelect={() => onSelectTask(task._id)}
                   isSelected={selectedTaskId === task._id}
+                  isTodayFocused={
+                    Boolean(
+                      activeTodayFocusYmd &&
+                        task.todayFocusDate === activeTodayFocusYmd
+                    )
+                  }
                   sectionSequentialForRoot={
                     task.parentId === null ? section.isSequential : undefined
                   }
@@ -560,7 +668,9 @@ export default function SectionView({
             ))}
           </SortableContext>
 
-          {section.type === "project" && projectFocusedView && sectionTasksUndated.length > 0 && (
+          {section.type === "project" &&
+            projectFocusedView &&
+            sectionTasksUndatedRoots.length > 0 && (
             <div
               style={{
                 marginTop: 14,
@@ -599,7 +709,7 @@ export default function SectionView({
                   <React.Fragment key={task._id}>
                     <TaskRow
                       task={task}
-                      childCount={childCountMapUndated[task._id] || 0}
+                      childCount={childCountMap[task._id] || 0}
                       onUpdate={onUpdateTask}
                       onDelete={onDeleteTask}
                       onAddChild={() =>
@@ -611,6 +721,12 @@ export default function SectionView({
                       onToggleCollapse={() => toggleCollapse(task._id)}
                       onSelect={() => onSelectTask(task._id)}
                       isSelected={selectedTaskId === task._id}
+                      isTodayFocused={
+                        Boolean(
+                          activeTodayFocusYmd &&
+                            task.todayFocusDate === activeTodayFocusYmd
+                        )
+                      }
                       sectionSequentialForRoot={
                         task.parentId === null ? section.isSequential : undefined
                       }
@@ -627,7 +743,7 @@ export default function SectionView({
             !(
               section.type === "project" &&
               projectFocusedView &&
-              sectionTasksUndated.length > 0
+              sectionTasksUndatedRoots.length > 0
             ) && (
               <div
                 style={{
@@ -639,7 +755,7 @@ export default function SectionView({
               >
                 {section.type === "project" &&
                 projectFocusedView &&
-                sectionTasksUndated.length === 0 ? (
+                sectionTasksUndatedRoots.length === 0 ? (
                   <>
                     No tasks match Focused view in the main list.{" "}
                     {onExitProjectFocusedView && (

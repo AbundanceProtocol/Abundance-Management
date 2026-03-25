@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useLayoutEffect } from "react";
+import Link from "next/link";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { TaskItem, SectionType } from "@/lib/types";
@@ -23,6 +24,7 @@ import {
   Clock,
   Calendar,
   ArrowDownRight,
+  ZoomIn,
 } from "./Icons";
 
 interface Props {
@@ -41,6 +43,12 @@ interface Props {
   sectionSequentialForRoot?: boolean;
   /** Used to apply recurring completion (advance due date + history). */
   sectionType?: SectionType;
+  /** Subtract from stored depth when rendering (e.g. task zoom page). */
+  depthIndentOffset?: number;
+  /** Disable drag reorder (e.g. fixed root on zoom page). */
+  sortableDisabled?: boolean;
+  /** Show a small clock badge when task is selected for today's focus. */
+  isTodayFocused?: boolean;
 }
 
 export default function TaskRow({
@@ -56,6 +64,9 @@ export default function TaskRow({
   isDragOverlay = false,
   sectionSequentialForRoot,
   sectionType,
+  depthIndentOffset = 0,
+  sortableDisabled = false,
+  isTodayFocused = false,
 }: Props) {
   const [isEditing, setIsEditing] = useState(!task.title);
   const [editValue, setEditValue] = useState(task.title);
@@ -135,7 +146,7 @@ export default function TaskRow({
     }
   };
 
-  const indent = task.depth * 28;
+  const indent = Math.max(0, task.depth - depthIndentOffset) * 28;
 
   const hasDueDate = Boolean(task.dueDate?.trim());
   const showScheduleOrDueBadge =
@@ -346,7 +357,17 @@ export default function TaskRow({
 
             <div className="task-row-text-stack">
               <div className="task-row-title-row">
-            {/* Title */}
+            {/* Title + zoom (grouped so zoom sits flush after text, not at row end) */}
+            <div
+              className="task-row-title-lead"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                minWidth: 0,
+                flex: "1 1 auto",
+              }}
+            >
             {isEditing ? (
               <input
                 ref={inputRef}
@@ -378,7 +399,7 @@ export default function TaskRow({
                 }}
                 className="task-row-title-input"
                 style={{
-                  flex: "1 1 140px",
+                  flex: "1 1 auto",
                   minWidth: 0,
                   background: "transparent",
                   border: "none",
@@ -398,9 +419,10 @@ export default function TaskRow({
                 }}
                 className="task-row-title"
                 style={{
-                  flex: "1 1 140px",
+                  flex: "0 1 auto",
                   minWidth: 0,
-                  cursor: "text",
+                  maxWidth: "100%",
+                  cursor: "pointer",
                   padding: "2px 4px",
                   textDecoration: task.completed ? "line-through" : "none",
                   color: task.completed ? "var(--text-muted)" : "var(--text-primary)",
@@ -417,6 +439,33 @@ export default function TaskRow({
                 )}
               </span>
             )}
+
+            {!isEditing &&
+              task.hideSubtasksOnMainBoard &&
+              childCount > 0 && (
+              <Link
+                href={`/task/${task._id}`}
+                onClick={(e) => e.stopPropagation()}
+                className="task-row-zoom-chip"
+                title="Open subtasks on their own page"
+                style={{
+                  flexShrink: 0,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "4px 6px",
+                  borderRadius: 6,
+                  background: "rgba(59, 130, 246, 0.28)",
+                  border: "1px solid rgba(96, 165, 250, 0.5)",
+                  color: "rgb(96, 165, 250)",
+                  textDecoration: "none",
+                  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.12)",
+                }}
+              >
+                <ZoomIn size={14} />
+              </Link>
+            )}
+            </div>
 
             {/* Inline badges (nowrap + horizontal scroll on narrow screens — see globals.css) */}
             <div
@@ -452,6 +501,19 @@ export default function TaskRow({
                   title="Critical Path"
                 >
                   <Flag size={13} />
+                </span>
+              )}
+
+              {isTodayFocused && (
+                <span
+                  style={{
+                    color: "var(--accent-amber)",
+                    display: "flex",
+                    alignItems: "center",
+                  }}
+                  title="Today's focus"
+                >
+                  <Clock size={10} />
                 </span>
               )}
 
@@ -553,7 +615,23 @@ export default function TaskRow({
               >
                 <Comment size={14} />
               </button>
-              {task.depth < MAX_TASK_DEPTH && (
+              {childCount > 0 && !task.hideSubtasksOnMainBoard && (
+                <Link
+                  href={`/task/${task._id}`}
+                  onClick={(e) => e.stopPropagation()}
+                  title="Open subtasks on their own page"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    padding: 4,
+                    borderRadius: 3,
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  <ZoomIn size={14} />
+                </Link>
+              )}
+              {task.depth - depthIndentOffset < MAX_TASK_DEPTH && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();

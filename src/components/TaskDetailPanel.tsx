@@ -2,7 +2,17 @@
 
 import React, { useState, useEffect } from "react";
 import { TaskItem, TimeUnit, TaskPriority, Section, RepeatFrequency } from "@/lib/types";
-import { Clock, Calendar, Flag, Link, FileText, ArrowDownRight } from "./Icons";
+import type { MarkdownPageItem, PagesEnvironment } from "@/lib/pagesTypes";
+import {
+  Clock,
+  Calendar,
+  Flag,
+  Link,
+  FileText,
+  ArrowDownRight,
+  ZoomIn,
+} from "./Icons";
+import { getActiveTodayFocusYmd, msUntilNextTodayFocusReset } from "@/lib/todayFocus";
 
 interface Props {
   task: TaskItem;
@@ -10,6 +20,11 @@ interface Props {
   section: Section | null;
   onUpdate: (task: Partial<TaskItem> & { _id: string }) => void;
   onClose: () => void;
+  /** Direct children count; used to show “subtasks on board” control. */
+  directChildCount: number;
+  /** Duplicate this task and its subtree as siblings below; optional. */
+  onDuplicate?: () => void | Promise<void>;
+  duplicateBusy?: boolean;
 }
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -19,7 +34,13 @@ export default function TaskDetailPanel({
   section,
   onUpdate,
   onClose,
+  directChildCount,
+  onDuplicate,
+  duplicateBusy = false,
 }: Props) {
+  const [activeTodayFocusYmd, setActiveTodayFocusYmd] = useState(() =>
+    getActiveTodayFocusYmd()
+  );
   const [title, setTitle] = useState(task.title);
   const [notes, setNotes] = useState(task.notes);
   const [urls, setUrls] = useState<string[]>(() => [...(task.urls ?? [])]);
@@ -36,6 +57,8 @@ export default function TaskDetailPanel({
   const [repeatFrequency, setRepeatFrequency] = useState<RepeatFrequency>(
     task.repeatFrequency ?? "none"
   );
+  const [linkedPageId, setLinkedPageId] = useState(task.linkedPageId ?? "");
+  const [pages, setPages] = useState<MarkdownPageItem[]>([]);
   const [repeatWeekdays, setRepeatWeekdays] = useState<number[]>(
     () => task.repeatWeekdays?.length ? [...task.repeatWeekdays] : [new Date().getDay()]
   );
@@ -49,14 +72,70 @@ export default function TaskDetailPanel({
     setPriority(task.priority ?? "medium");
     setStartDate(task.startDate || "");
     setDueDate(task.dueDate || "");
+    setLinkedPageId(task.linkedPageId ?? "");
     setRepeatFrequency(task.repeatFrequency ?? "none");
     setRepeatWeekdays(
       task.repeatWeekdays?.length ? [...task.repeatWeekdays] : [new Date().getDay()]
     );
   }, [task]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const schedule = () => {
+      const ms = msUntilNextTodayFocusReset(new Date());
+      const t = window.setTimeout(() => {
+        if (cancelled) return;
+        setActiveTodayFocusYmd(getActiveTodayFocusYmd(new Date()));
+        schedule();
+      }, Math.max(0, ms));
+      return t;
+    };
+    const t = schedule();
+    return () => {
+      cancelled = true;
+      if (t) window.clearTimeout(t);
+    };
+  }, []);
+
+  const isTodayFocused = task.todayFocusDate === activeTodayFocusYmd;
+
+  useEffect(() => {
+    let mounted = true;
+    const loadPages = async () => {
+      try {
+        const res = await fetch("/api/pages");
+        const data = (await res.json()) as PagesEnvironment;
+        if (!mounted) return;
+        setPages(data?.items ?? []);
+      } catch {
+        if (mounted) setPages([]);
+      }
+    };
+    void loadPages();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const save = (partial: Partial<TaskItem>) => {
     onUpdate({ _id: task._id, ...partial });
+  };
+
+  const syncPageRootTask = async (pageId: string, taskId: string) => {
+    try {
+      const res = await fetch("/api/pages");
+      const data = (await res.json()) as PagesEnvironment;
+      const items = (data?.items ?? []).map((p) =>
+        p.id === pageId ? { ...p, linkedTaskId: taskId } : p
+      );
+      await fetch("/api/pages", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+    } catch {
+      // non-fatal
+    }
   };
 
   const commitUrls = () => {
@@ -173,6 +252,44 @@ export default function TaskDetailPanel({
             }}
           />
         </div>
+
+        {onDuplicate && (
+          <div>
+            <button
+              type="button"
+              disabled={duplicateBusy}
+              onClick={() => void onDuplicate()}
+              style={{
+                width: "100%",
+                fontSize: 13,
+                padding: "8px 12px",
+                borderRadius: 6,
+                border: "1px solid var(--border-color)",
+                background: duplicateBusy
+                  ? "var(--bg-primary)"
+                  : "var(--bg-tertiary)",
+                color: "var(--text-secondary)",
+                cursor: duplicateBusy ? "wait" : "pointer",
+                fontWeight: 500,
+              }}
+            >
+              {duplicateBusy
+                ? "Duplicating…"
+                : "Duplicate (task + all subtasks below)"}
+            </button>
+            <p
+              style={{
+                fontSize: 11,
+                color: "var(--text-muted)",
+                margin: "8px 0 0",
+                lineHeight: 1.4,
+              }}
+            >
+              Inserts a copy directly under this task in the list, with the same
+              fields and nested structure.
+            </p>
+          </div>
+        )}
 
         {/* Time Estimate */}
         <div>
@@ -436,6 +553,62 @@ export default function TaskDetailPanel({
           </div>
         )}
 
+        {/* Linked page */}
+        <div>
+          <label
+            style={{
+              display: "block",
+              fontSize: 12,
+              color: "var(--text-secondary)",
+              marginBottom: 6,
+            }}
+          >
+            Linked page
+          </label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <select
+              value={linkedPageId}
+              onChange={async (e) => {
+                const v = e.target.value;
+                setLinkedPageId(v);
+                save({ linkedPageId: v || null });
+                if (v) {
+                  await syncPageRootTask(v, task._id);
+                }
+              }}
+              style={{ flex: 1, minWidth: 0, padding: "8px 10px", borderRadius: 6 }}
+            >
+              <option value="">No linked page</option>
+              {pages.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.title.trim() || "Untitled"}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              disabled={!linkedPageId}
+              onClick={() => {
+                if (!linkedPageId) return;
+                window.location.href = `/pages?pageId=${encodeURIComponent(linkedPageId)}&taskId=${encodeURIComponent(task._id)}`;
+              }}
+              style={{
+                flexShrink: 0,
+                padding: "8px 10px",
+                fontSize: 12,
+                borderRadius: 6,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-tertiary)",
+                color: linkedPageId ? "var(--accent-blue)" : "var(--text-muted)",
+                opacity: linkedPageId ? 1 : 0.6,
+                cursor: linkedPageId ? "pointer" : "default",
+              }}
+            >
+              Open
+            </button>
+          </div>
+        </div>
+
         {/* Links */}
         <div>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 }}>
@@ -603,6 +776,147 @@ export default function TaskDetailPanel({
             </p>
           )}
         </div>
+
+        {/* Today’s Focus */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "8px 0",
+          }}
+        >
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 13,
+              color: "var(--text-secondary)",
+            }}
+          >
+            <span style={{ display: "flex", color: isTodayFocused ? "var(--accent-amber)" : "var(--text-secondary)" }}>
+              <Flag size={14} />
+            </span>
+            Today’s focus
+          </label>
+          <button
+            type="button"
+            onClick={() =>
+              save({
+                todayFocusDate: isTodayFocused ? null : activeTodayFocusYmd,
+              })
+            }
+            style={{
+              width: 36,
+              height: 20,
+              borderRadius: 10,
+              background: isTodayFocused
+                ? "rgba(245, 158, 11, 0.25)"
+                : "var(--bg-tertiary)",
+              border: "1px solid var(--border-color)",
+              position: "relative",
+              padding: 0,
+              cursor: "pointer",
+              transition: "background 0.2s",
+            }}
+            aria-pressed={isTodayFocused}
+            title={isTodayFocused ? "Remove from today’s focus" : "Mark for today’s focus"}
+          >
+            <span
+              style={{
+                position: "absolute",
+                top: 2,
+                left: isTodayFocused ? 18 : 2,
+                width: 14,
+                height: 14,
+                borderRadius: "50%",
+                background: "white",
+                transition: "left 0.2s",
+              }}
+            />
+          </button>
+        </div>
+
+        {/* Zoom: subtasks on board vs zoom page */}
+        {directChildCount > 0 && (
+          <div style={{ padding: "8px 0" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 13,
+                  color: "var(--text-secondary)",
+                }}
+              >
+                <span
+                  style={{
+                    display: "flex",
+                    color: task.hideSubtasksOnMainBoard
+                      ? "var(--accent-blue)"
+                      : "var(--text-secondary)",
+                  }}
+                >
+                  <ZoomIn size={14} />
+                </span>
+                Board: this task only (subtasks on zoom)
+              </label>
+              <button
+                type="button"
+                onClick={() =>
+                  save({
+                    hideSubtasksOnMainBoard: !task.hideSubtasksOnMainBoard,
+                  })
+                }
+                style={{
+                  width: 36,
+                  height: 20,
+                  borderRadius: 10,
+                  background: task.hideSubtasksOnMainBoard
+                    ? "var(--accent-blue)"
+                    : "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  position: "relative",
+                  transition: "background 0.2s",
+                  padding: 0,
+                  cursor: "pointer",
+                }}
+              >
+                <span
+                  style={{
+                    position: "absolute",
+                    top: 2,
+                    left: task.hideSubtasksOnMainBoard ? 18 : 2,
+                    width: 14,
+                    height: 14,
+                    borderRadius: "50%",
+                    background: "white",
+                    transition: "left 0.2s",
+                  }}
+                />
+              </button>
+            </div>
+            <p
+              style={{
+                fontSize: 11,
+                color: "var(--text-muted)",
+                margin: "8px 0 0",
+                lineHeight: 1.4,
+              }}
+            >
+              When on, subtasks are hidden from the board list. Use the blue zoom
+              control on the row or open this task’s page from the zoom icon.
+            </p>
+          </div>
+        )}
 
         {/* Notes */}
         <div>

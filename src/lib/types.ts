@@ -1,3 +1,5 @@
+import type { TaskWorkspaceState } from "./workspaceTypes";
+
 export type TimeUnit = "minutes" | "hours" | "days";
 
 export type TaskPriority = "low" | "medium" | "high";
@@ -16,7 +18,7 @@ export interface TaskItem {
   parentId: string | null;
   title: string;
   completed: boolean;
-  depth: number; // 0 = top-level row; see MAX_TASK_DEPTH in constants.ts
+  depth: number; // 0 = top-level row under the section
   order: number;
   /** Defaults to medium when missing (older tasks). */
   priority?: TaskPriority;
@@ -32,6 +34,11 @@ export interface TaskItem {
   isCriticalPath: boolean;
   isSequential: boolean;
   collapsed: boolean;
+  /**
+   * When true, direct child rows (and their descendants) are omitted from the section list on the board;
+   * open this task’s page to work on subtasks.
+   */
+  hideSubtasksOnMainBoard?: boolean;
   tags: string[];
   /** When set and not `none`, completing the task logs a date and advances `dueDate`. */
   repeatFrequency?: RepeatFrequency;
@@ -39,6 +46,16 @@ export interface TaskItem {
   repeatWeekdays?: number[];
   /** YYYY-MM-DD entries when a recurring instance was completed. */
   completionHistory?: string[];
+  /** Visual canvas for this task (media + markdown); only meaningful on the anchor task for a workspace page. */
+  workspace?: TaskWorkspaceState;
+  /** Optional linked standalone page id. */
+  linkedPageId?: string | null;
+  /**
+   * When set, this task is selected for "Today’s focus".
+   * Stored as a YYYY-MM-DD local date corresponding to the active focus period
+   * (which resets daily at 2:00am local time).
+   */
+  todayFocusDate?: string | null;
   createdAt: string;
   updatedAt: string;
 }

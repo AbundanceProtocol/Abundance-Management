@@ -86,6 +86,7 @@ export function useTasks() {
         isCriticalPath: false,
         isSequential: false,
         collapsed: false,
+        hideSubtasksOnMainBoard: false,
         tags: [],
         ...(isRecurring
           ? {
@@ -165,6 +166,25 @@ export function useTasks() {
     []
   );
 
+  const duplicateTaskWithSubtree = useCallback(
+    async (taskId: string) => {
+      const res = await fetch("/api/tasks/duplicate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          typeof data.error === "string" ? data.error : "Duplicate failed"
+        );
+      }
+      await fetchTasks();
+      return data.rootId as string;
+    },
+    [fetchTasks]
+  );
+
   const createTaskAfter = useCallback(
     async (afterTask: TaskItem, sectionType?: SectionType) => {
       const { sectionId, parentId, depth } = afterTask;
@@ -206,6 +226,7 @@ export function useTasks() {
         isCriticalPath: false,
         isSequential: false,
         collapsed: false,
+        hideSubtasksOnMainBoard: false,
         tags: [],
         ...(isRecurring
           ? {
@@ -236,6 +257,7 @@ export function useTasks() {
     updateTask,
     deleteTask,
     reorderTasks,
+    duplicateTaskWithSubtree,
     refetch: fetchTasks,
   };
 }

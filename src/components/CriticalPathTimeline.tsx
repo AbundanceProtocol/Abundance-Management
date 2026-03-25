@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect, useRef } from "react";
 import { Section, TaskItem } from "@/lib/types";
 import {
   buildProjectRanges,
@@ -158,13 +158,27 @@ export default function CriticalPathTimeline({
   );
 
   /** Chart-only collapse (independent of task.collapsed in the list). */
-  const [chartCollapsedIds, setChartCollapsedIds] = useState<Set<string>>(
-    () => new Set()
+  const [chartCollapsedIds, setChartCollapsedIds] = useState<Set<string>>(() =>
+    parentIdsWithChildren(allSectionTasks)
   );
 
+  const prevEmptyTasksRef = useRef(allSectionTasks.length === 0);
+
   useEffect(() => {
-    setChartCollapsedIds(new Set());
+    setChartCollapsedIds(parentIdsWithChildren(allSectionTasks));
+    prevEmptyTasksRef.current = allSectionTasks.length === 0;
   }, [section._id]);
+
+  useEffect(() => {
+    if (allSectionTasks.length === 0) {
+      prevEmptyTasksRef.current = true;
+      return;
+    }
+    if (prevEmptyTasksRef.current) {
+      prevEmptyTasksRef.current = false;
+      setChartCollapsedIds(parentIdsWithChildren(allSectionTasks));
+    }
+  }, [allSectionTasks]);
 
   const topLevelSort = section.topLevelSort ?? "manual";
 
@@ -511,6 +525,7 @@ export default function CriticalPathTimeline({
                 return (
                   <div
                     key={r.task._id}
+                    onClick={() => onSelectTask(r.task._id)}
                     style={{
                       display: "flex",
                       minHeight: ROW_H,
@@ -519,6 +534,7 @@ export default function CriticalPathTimeline({
                         row % 2 === 0
                           ? "rgba(255,255,255,0.02)"
                           : "transparent",
+                      cursor: "pointer",
                     }}
                   >
                     <div
@@ -639,7 +655,10 @@ export default function CriticalPathTimeline({
                       })}
                       <button
                         type="button"
-                        onClick={() => onSelectTask(r.task._id)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectTask(r.task._id);
+                        }}
                         title={r.task.title}
                         style={{
                           position: "absolute",

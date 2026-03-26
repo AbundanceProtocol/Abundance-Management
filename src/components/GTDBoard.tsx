@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   DndContext,
@@ -11,20 +10,21 @@ import {
   DragEndEvent,
   DragOverEvent,
   DragOverlay,
-  PointerSensor,
-  useSensor,
-  useSensors,
   MeasuringStrategy,
   CollisionDetection,
 } from "@dnd-kit/core";
 import { useSections, useTasks } from "@/lib/hooks";
 import { TaskItem, SectionType } from "@/lib/types";
+import { useBoardDndSensors } from "@/lib/boardDndSensors";
 import SectionView from "./SectionView";
 import CompletedTasksView from "./CompletedTasksView";
 import TaskRow from "./TaskRow";
 import TaskDetailPanel from "./TaskDetailPanel";
 import DeleteTaskConfirmModal from "./DeleteTaskConfirmModal";
 import CriticalPathTimeline from "./CriticalPathTimeline";
+import { AppNavTasksPages } from "./AppNavTasksPages";
+import SegmentedBooleanToggle from "./SegmentedBooleanToggle";
+import { SEGMENTED_ACTIVE, SEGMENTED_INACTIVE } from "@/lib/segmentedControlStyles";
 import {
   computeNestMove,
   computeSiblingMove,
@@ -51,6 +51,8 @@ const BOARD_TAB_STORAGE_KEY = "abundance-board-tab";
 const SHOW_COMPLETED_MAIN_STORAGE_KEY = "abundance-show-completed-main";
 const SHOW_TODAY_FOCUS_ONLY_STORAGE_KEY =
   "abundance-show-today-focus-only";
+
+type BoardLayoutMode = "all" | "today" | "week" | "completed";
 
 function readShowTodayFocusOnly(): boolean {
   if (typeof window === "undefined") return false;
@@ -105,6 +107,14 @@ function readProjectFocusedView(): boolean {
   }
 }
 
+function readBoardLayoutMode(): BoardLayoutMode {
+  if (typeof window === "undefined") return "all";
+  if (readBoardTab() === "completed") return "completed";
+  if (readShowTodayFocusOnly()) return "today";
+  if (readProjectFocusedView()) return "week";
+  return "all";
+}
+
 /** Prefer the thin strip below a row (`nest-below-*`) so nesting vs reorder is explicit; else pointer-in-rect; else closest center. */
 const nestStripCollision: CollisionDetection = (args) => {
   const pointCollisions = pointerWithin(args);
@@ -135,31 +145,27 @@ export default function GTDBoard() {
 
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [duplicateBusy, setDuplicateBusy] = useState(false);
-  const [boardTab, setBoardTab] = useState<"board" | "completed">(readBoardTab);
+  const [boardLayoutMode, setBoardLayoutMode] = useState<BoardLayoutMode>(
+    readBoardLayoutMode
+  );
   const [showCompletedOnMain, setShowCompletedOnMain] = useState(
     readShowCompletedMain
   );
   const [showCriticalPath, setShowCriticalPath] = useState(readShowCriticalPath);
-  const [showTodayFocusOnly, setShowTodayFocusOnly] = useState(
-    readShowTodayFocusOnly
-  );
   const [activeTodayFocusYmd, setActiveTodayFocusYmd] = useState(
     getActiveTodayFocusYmd()
   );
-  const [projectFocusedView, setProjectFocusedView] = useState(
-    readProjectFocusedView
-  );
+
+  const boardTab = boardLayoutMode === "completed" ? "completed" : "board";
+  const showTodayFocusOnly = boardLayoutMode === "today";
+  const projectFocusedView = boardLayoutMode === "week";
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   /** Task id currently hovered while dragging; timer starts when this changes. */
   const hoverTargetRef = useRef<string | null>(null);
   const hoverStartRef = useRef<number | null>(null);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 5 },
-    })
-  );
+  const sensors = useBoardDndSensors();
 
   const selectedTask = useMemo(
     () => tasks.find((t) => t._id === selectedTaskId) || null,
@@ -206,17 +212,6 @@ export default function GTDBoard() {
   }, [showCriticalPath]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(
-        SHOW_TODAY_FOCUS_ONLY_STORAGE_KEY,
-        showTodayFocusOnly ? "1" : "0"
-      );
-    } catch {
-      /* ignore */
-    }
-  }, [showTodayFocusOnly]);
-
-  useEffect(() => {
     let cancelled = false;
     let t: number | null = null;
 
@@ -239,11 +234,22 @@ export default function GTDBoard() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(BOARD_TAB_STORAGE_KEY, boardTab);
+      localStorage.setItem(
+        BOARD_TAB_STORAGE_KEY,
+        boardLayoutMode === "completed" ? "completed" : "board"
+      );
+      localStorage.setItem(
+        SHOW_TODAY_FOCUS_ONLY_STORAGE_KEY,
+        boardLayoutMode === "today" ? "1" : "0"
+      );
+      localStorage.setItem(
+        PROJECT_FOCUSED_VIEW_STORAGE_KEY,
+        boardLayoutMode === "week" ? "1" : "0"
+      );
     } catch {
       /* ignore */
     }
-  }, [boardTab]);
+  }, [boardLayoutMode]);
 
   useEffect(() => {
     try {
@@ -255,17 +261,6 @@ export default function GTDBoard() {
       /* ignore */
     }
   }, [showCompletedOnMain]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        PROJECT_FOCUSED_VIEW_STORAGE_KEY,
-        projectFocusedView ? "1" : "0"
-      );
-    } catch {
-      /* ignore */
-    }
-  }, [projectFocusedView]);
 
   const activeTaskSection = useMemo(
     () =>
@@ -279,6 +274,12 @@ export default function GTDBoard() {
     () => sections.find((s) => s.type === "project"),
     [sections]
   );
+
+  useEffect(() => {
+    if (!projectSection && boardLayoutMode === "week") {
+      setBoardLayoutMode("all");
+    }
+  }, [projectSection, boardLayoutMode]);
 
   const projectSectionTasks = useMemo(
     () =>
@@ -566,11 +567,8 @@ export default function GTDBoard() {
             >
               GTD + Critical Path Method
             </p>
-            <div style={{ marginTop: 8, display: "flex", gap: 10, fontSize: 13 }}>
-              <strong>Tasks</strong>
-              <Link href="/pages" style={{ color: "var(--accent-blue)" }}>
-                Pages
-              </Link>
+            <div style={{ marginTop: 10 }}>
+              <AppNavTasksPages active="tasks" />
             </div>
           </div>
           <div
@@ -585,142 +583,83 @@ export default function GTDBoard() {
             <div
               style={{
                 display: "flex",
+                flexWrap: "wrap",
                 borderRadius: 8,
                 border: "1px solid var(--border-color)",
                 overflow: "hidden",
+                maxWidth: "100%",
               }}
             >
-              <button
-                type="button"
-                onClick={() => setBoardTab("board")}
-                aria-pressed={boardTab === "board"}
-                style={{
-                  fontSize: 13,
-                  padding: "6px 14px",
-                  border: "none",
-                  background:
-                    boardTab === "board" ? "var(--bg-tertiary)" : "transparent",
-                  color: "var(--text-secondary)",
-                  cursor: "pointer",
-                }}
-              >
-                Board
-              </button>
-              <button
-                type="button"
-                onClick={() => setBoardTab("completed")}
-                aria-pressed={boardTab === "completed"}
-                style={{
-                  fontSize: 13,
-                  padding: "6px 14px",
-                  border: "none",
-                  borderLeft: "1px solid var(--border-color)",
-                  background:
-                    boardTab === "completed"
-                      ? "var(--bg-tertiary)"
-                      : "transparent",
-                  color: "var(--text-secondary)",
-                  cursor: "pointer",
-                }}
-              >
-                Completed
-              </button>
+              {(
+                [
+                  { mode: "all" as const, label: "All tasks" },
+                  {
+                    mode: "today" as const,
+                    label: "Today's focus",
+                    title: "Only tasks marked for today’s focus (and their subtasks)",
+                  },
+                  {
+                    mode: "week" as const,
+                    label: "Week's focus",
+                    title: projectSection
+                      ? "Project: tasks due or starting in the focused window, and unscheduled roots separately"
+                      : "Requires a project section",
+                    disabled: !projectSection,
+                  },
+                  { mode: "completed" as const, label: "Completed" },
+                ] as const
+              ).map((opt, i) => (
+                <button
+                  key={opt.mode}
+                  type="button"
+                  disabled={"disabled" in opt ? opt.disabled : false}
+                  onClick={() => setBoardLayoutMode(opt.mode)}
+                  aria-pressed={boardLayoutMode === opt.mode}
+                  aria-label={
+                    opt.mode === "week" && !projectSection
+                      ? "Week's focus (add a project section to use)"
+                      : undefined
+                  }
+                  title={"title" in opt ? opt.title : undefined}
+                  style={{
+                    fontSize: 13,
+                    padding: "6px 12px",
+                    border: "none",
+                    borderLeft: i > 0 ? "1px solid var(--border-color)" : "none",
+                    ...("disabled" in opt && opt.disabled
+                      ? {
+                          background: "transparent",
+                          color: "var(--text-muted)",
+                          fontWeight: 500,
+                          cursor: "not-allowed" as const,
+                          opacity: 0.55,
+                        }
+                      : boardLayoutMode === opt.mode
+                        ? SEGMENTED_ACTIVE
+                        : SEGMENTED_INACTIVE),
+                    flex: "1 1 auto",
+                    minWidth: 0,
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
             {boardTab === "board" && (
-              <button
-                type="button"
-                onClick={() => setShowCompletedOnMain((v) => !v)}
-                aria-pressed={showCompletedOnMain}
-                title={
-                  showCompletedOnMain
-                    ? "Hide completed tasks on the board"
-                    : "Show completed tasks on the board"
-                }
-                style={{
-                  fontSize: 13,
-                  padding: "6px 12px",
-                  borderRadius: 6,
-                  border: "1px solid var(--border-color)",
-                  background: showCompletedOnMain
-                    ? "var(--bg-tertiary)"
-                    : "transparent",
-                  color: "var(--text-secondary)",
-                  cursor: "pointer",
-                }}
-              >
-                {showCompletedOnMain ? "Hide completed" : "Show completed"}
-              </button>
-            )}
-            {boardTab === "board" && (
-              <button
-                type="button"
-                onClick={() => setShowTodayFocusOnly((v) => !v)}
-                aria-pressed={showTodayFocusOnly}
-                title="Show only tasks selected for today’s focus"
-                style={{
-                  fontSize: 13,
-                  padding: "6px 12px",
-                  borderRadius: 6,
-                  border: "1px solid var(--border-color)",
-                  background: showTodayFocusOnly
-                    ? "var(--bg-tertiary)"
-                    : "transparent",
-                  color: "var(--text-secondary)",
-                  cursor: "pointer",
-                }}
-              >
-                {showTodayFocusOnly ? "Today’s focus: on" : "Today’s focus"}
-              </button>
+              <SegmentedBooleanToggle
+                label="Completed"
+                value={showCompletedOnMain}
+                onChange={setShowCompletedOnMain}
+                title="Completed tasks on the main board"
+              />
             )}
             {projectSection && boardTab === "board" && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setProjectFocusedView((v) => !v)}
-                  aria-pressed={projectFocusedView}
-                  title={
-                    projectFocusedView
-                      ? "Show all project tasks and full timeline"
-                      : "Show only tasks due or starting soon; unscheduled roots listed separately"
-                  }
-                  style={{
-                    fontSize: 13,
-                    padding: "6px 12px",
-                    borderRadius: 6,
-                    border: "1px solid var(--border-color)",
-                    background: projectFocusedView
-                      ? "var(--bg-tertiary)"
-                      : "transparent",
-                    color: "var(--text-secondary)",
-                    cursor: "pointer",
-                  }}
-                >
-                  {projectFocusedView ? "Focused (on)" : "Focused view"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowCriticalPath((v) => !v)}
-                  aria-pressed={showCriticalPath}
-                  title={
-                    showCriticalPath
-                      ? "Hide critical path graph"
-                      : "Show critical path graph"
-                  }
-                  style={{
-                    fontSize: 13,
-                    padding: "6px 12px",
-                    borderRadius: 6,
-                    border: "1px solid var(--border-color)",
-                    background: showCriticalPath
-                      ? "var(--bg-tertiary)"
-                      : "rgba(75, 156, 245, 0.12)",
-                    color: "var(--text-secondary)",
-                    cursor: "pointer",
-                  }}
-                >
-                  {showCriticalPath ? "Hide graph" : "Show graph"}
-                </button>
-              </>
+              <SegmentedBooleanToggle
+                label="Graph"
+                value={showCriticalPath}
+                onChange={setShowCriticalPath}
+                title="Critical path graph"
+              />
             )}
             <button
               type="button"
@@ -750,7 +689,7 @@ export default function GTDBoard() {
             tasks={tasks}
             onSelectTask={(id) => setSelectedTaskId(id)}
             isFocusedView={projectFocusedView}
-            onExitFocusedView={() => setProjectFocusedView(false)}
+            onExitFocusedView={() => setBoardLayoutMode("all")}
           />
         )}
 
@@ -815,7 +754,7 @@ export default function GTDBoard() {
                   projectFocusedView={projectFocusedView}
                   focusedProjectMainIds={projectFocusSets?.mainIds ?? null}
                   focusedProjectUndatedIds={projectFocusSets?.undatedIds ?? null}
-                  onExitProjectFocusedView={() => setProjectFocusedView(false)}
+                  onExitProjectFocusedView={() => setBoardLayoutMode("all")}
                 />
               ))}
 
@@ -858,6 +797,10 @@ export default function GTDBoard() {
           onClose={() => setSelectedTaskId(null)}
           onDuplicate={handleDuplicateTask}
           duplicateBusy={duplicateBusy}
+          tasks={tasks}
+          reorderTasks={reorderTasks}
+          createTask={createTask}
+          onNavigateToTask={(id) => setSelectedTaskId(id)}
         />
       )}
 

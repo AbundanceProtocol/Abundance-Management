@@ -40,6 +40,8 @@ export interface TaskItem {
    */
   hideSubtasksOnMainBoard?: boolean;
   tags: string[];
+  /** Free-form label for grouping; empty = uncategorized. Used when section sorts by category. */
+  category?: string;
   /** When set and not `none`, completing the task logs a date and advances `dueDate`. */
   repeatFrequency?: RepeatFrequency;
   /** 0–6 Sun–Sat; used when `repeatFrequency` is `weekly`. */
@@ -70,6 +72,11 @@ export interface Section {
   isSequential: boolean;
   /** Sort order for top-level tasks only; nested tasks use drag `order`. */
   topLevelSort?: TopLevelSort;
+  /**
+   * When true, top-level tasks are grouped under category headings; order within each group
+   * follows `topLevelSort` (independent toggle).
+   */
+  groupByCategory?: boolean;
 }
 
 export type NewTask = Omit<TaskItem, "_id" | "createdAt" | "updatedAt">;

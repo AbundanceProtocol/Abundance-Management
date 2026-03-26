@@ -11,9 +11,6 @@ import {
   DragEndEvent,
   DragOverEvent,
   DragOverlay,
-  PointerSensor,
-  useSensor,
-  useSensors,
   MeasuringStrategy,
   CollisionDetection,
 } from "@dnd-kit/core";
@@ -23,7 +20,7 @@ import {
 } from "@dnd-kit/sortable";
 import { useSections, useTasks } from "@/lib/hooks";
 import { TaskItem, SectionType } from "@/lib/types";
-import { buildVisibleTaskTree } from "@/lib/timelineUtils";
+import { buildVisibleTaskTree, coerceTopLevelSort } from "@/lib/timelineUtils";
 import { filterTasksForMainView } from "@/lib/recurrence";
 import { filterSubtreeTasks } from "@/lib/taskSubtree";
 import {
@@ -36,6 +33,7 @@ import {
   NEST_HOVER_MS,
   NEST_BELOW_PREFIX,
 } from "@/lib/constants";
+import { useBoardDndSensors } from "@/lib/boardDndSensors";
 import { taskHasAnyUserData } from "@/lib/taskUserData";
 import TaskRow from "./TaskRow";
 import NestDropZone from "./NestDropZone";
@@ -75,11 +73,7 @@ export default function TaskZoomView({ taskId }: { taskId: string }) {
   const hoverTargetRef = useRef<string | null>(null);
   const hoverStartRef = useRef<number | null>(null);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 5 },
-    })
-  );
+  const sensors = useBoardDndSensors();
 
   const anchor = useMemo(
     () => tasks.find((t) => t._id === taskId) ?? null,
@@ -114,7 +108,7 @@ export default function TaskZoomView({ taskId }: { taskId: string }) {
       baseList,
       anchor._id,
       collapsedIds,
-      section.topLevelSort ?? "manual"
+      coerceTopLevelSort(section.topLevelSort ?? "manual")
     );
     return [anchor, ...rest];
   }, [anchor, section, baseList, collapsedIds]);
@@ -584,6 +578,10 @@ export default function TaskZoomView({ taskId }: { taskId: string }) {
           onClose={() => setSelectedTaskId(null)}
           onDuplicate={handleDuplicateTask}
           duplicateBusy={duplicateBusy}
+          tasks={tasks}
+          reorderTasks={reorderTasks}
+          createTask={createTask}
+          onNavigateToTask={(id) => setSelectedTaskId(id)}
         />
       )}
 

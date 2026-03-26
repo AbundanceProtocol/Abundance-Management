@@ -7,6 +7,31 @@ interface IconProps {
   className?: string;
 }
 
+/** Three horizontal lines — menu / page options */
+export function Menu({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function Check({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path d="M3.5 8.5l2.5 2.5 6-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function ChevronLeft({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path d="M10 4l-4 4 4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function ChevronRight({ size = 16, className = "" }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
@@ -40,6 +65,17 @@ export function GripVertical({ size = 16, className = "" }: IconProps) {
       <circle cx="10" cy="8" r="1" fill="currentColor" />
       <circle cx="6" cy="12" r="1" fill="currentColor" />
       <circle cx="10" cy="12" r="1" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** Vertical ellipsis — task row overflow menu */
+export function MoreVertical({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <circle cx="8" cy="3.5" r="1.25" fill="currentColor" />
+      <circle cx="8" cy="8" r="1.25" fill="currentColor" />
+      <circle cx="8" cy="12.5" r="1.25" fill="currentColor" />
     </svg>
   );
 }
@@ -100,6 +136,18 @@ export function ArrowDownRight({ size = 16, className = "" }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
       <path d="M5 4l6 6M11 5v5H6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** 2×2 grid — pane / layout control */
+export function LayoutGrid({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.2" />
+      <rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.2" />
+      <rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.2" />
+      <rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.2" />
     </svg>
   );
 }

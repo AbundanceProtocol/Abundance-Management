@@ -22,6 +22,7 @@ import {
   Trash,
   FileText,
   ZoomIn,
+  ChevronLeft,
   ChevronRight,
   ChevronDown,
 } from "./Icons";
@@ -32,11 +33,12 @@ import {
   serializePageDocument,
   type PageDocumentV3,
 } from "@/lib/pageDocument";
+import { VIEWPORT_NARROW_MQ } from "@/lib/useViewportNarrow";
 import TaskTreeSelect from "./TaskTreeSelect";
 import TaskNotesModal from "./TaskNotesModal";
 import { filterSubtreeTasks } from "@/lib/taskSubtree";
 import { filterTasksForMainView } from "@/lib/recurrence";
-import { buildVisibleTaskTree } from "@/lib/timelineUtils";
+import { buildVisibleTaskTree, coerceTopLevelSort } from "@/lib/timelineUtils";
 import { normalizeWorkspace } from "@/lib/workspaceNormalize";
 import { snapToGrid } from "@/lib/workspaceCanvas";
 import {
@@ -58,6 +60,8 @@ type PageBlockEditorProps = {
   body: string;
   onChange: (serializedBody: string) => void;
   editing: boolean;
+  /** Must match PagesView narrow breakpoint — single source of truth for layout vs. `useViewportNarrow`. */
+  layoutNarrow: boolean;
   /** Allowed tasks in depth-first tree order (see `orderTasksForPageLinkPicker`). */
   linkTaskOptions: TaskItem[];
   /** Page’s linked root task; drives subtree indent in the picker. */
@@ -65,6 +69,11 @@ type PageBlockEditorProps = {
   tasks: TaskItem[];
   sections: Section[];
   updateTask: (task: Partial<TaskItem> & { _id: string }) => void | Promise<void>;
+  /** When set with handlers, parent (Pages) owns narrow mobile toolbar + tasks panel visibility. */
+  tasksPanelCollapsed?: boolean;
+  onTasksPanelCollapsedChange?: (collapsed: boolean) => void;
+  narrowMobileToolbarOpen?: boolean;
+  onNarrowMobileToolbarOpenChange?: (open: boolean) => void;
 };
 
 const TASKS_PANEL_WIDTH_STORAGE_KEY = "pages.tasksPanelWidth";
@@ -208,7 +217,7 @@ function PageLinkedTaskGutterCard({
 
   const orderedTasks = useMemo(() => {
     if (!anchor) return [];
-    const topSort = section?.topLevelSort ?? "manual";
+    const topSort = coerceTopLevelSort(section?.topLevelSort ?? "manual");
     return [
       anchor,
       ...buildVisibleTaskTree(
@@ -896,11 +905,16 @@ export default function PageBlockEditor({
   body,
   onChange,
   editing,
+  layoutNarrow,
   linkTaskOptions,
   pageLinkedRootTaskId,
   tasks,
   sections,
   updateTask,
+  tasksPanelCollapsed: tasksPanelCollapsedProp,
+  onTasksPanelCollapsedChange,
+  narrowMobileToolbarOpen: narrowMobileToolbarOpenProp,
+  onNarrowMobileToolbarOpenChange,
 }: PageBlockEditorProps) {
   const [doc, setDoc] = useState<PageDocumentV3>(() => parsePageBody(body));
   const docRef = useRef(doc);
@@ -958,7 +972,9 @@ export default function PageBlockEditor({
     if (!thumbPanel || !thumbRootTask) return [];
     const subtree = filterSubtreeTasks(tasks, thumbPanel.rootTaskId);
     const baseList = filterTasksForMainView(subtree, true);
-    const topSort = thumbRootSection?.topLevelSort ?? "manual";
+    const topSort = coerceTopLevelSort(
+      thumbRootSection?.topLevelSort ?? "manual"
+    );
     return [
       thumbRootTask,
       ...buildVisibleTaskTree(
@@ -1316,6 +1332,54 @@ export default function PageBlockEditor({
 
   const notesTask = notesTaskId ? tasks.find((t) => t._id === notesTaskId) : null;
 
+  const narrowLayout = layoutNarrow;
+  const [internalTasksCollapsed, setInternalTasksCollapsed] = useState(true);
+  const [internalToolbarOpen, setInternalToolbarOpen] = useState(false);
+
+  const controlledMobileChrome =
+    typeof onTasksPanelCollapsedChange === "function" &&
+    typeof onNarrowMobileToolbarOpenChange === "function";
+
+  const tasksPanelCollapsed = controlledMobileChrome
+    ? tasksPanelCollapsedProp!
+    : internalTasksCollapsed;
+  const setTasksPanelCollapsed = controlledMobileChrome
+    ? onTasksPanelCollapsedChange!
+    : setInternalTasksCollapsed;
+  const narrowMobileToolbarOpen = controlledMobileChrome
+    ? narrowMobileToolbarOpenProp!
+    : internalToolbarOpen;
+  const setNarrowMobileToolbarOpen = controlledMobileChrome
+    ? onNarrowMobileToolbarOpenChange!
+    : setInternalToolbarOpen;
+
+  useLayoutEffect(() => {
+    if (controlledMobileChrome) return;
+    if (typeof window === "undefined") return;
+    if (window.matchMedia(VIEWPORT_NARROW_MQ).matches) {
+      setInternalTasksCollapsed(true);
+      setInternalToolbarOpen(false);
+    }
+  }, [controlledMobileChrome]);
+
+  const tasksPanelVisible = !narrowLayout || !tasksPanelCollapsed;
+
+  useLayoutEffect(() => {
+    measureGutter();
+  }, [measureGutter, tasksPanelCollapsed]);
+
+  /** Block ghost clicks on the collapse chevron right after the panel mounts (same gesture as "open"). */
+  const [tasksPanelCollapsePointerGuard, setTasksPanelCollapsePointerGuard] = useState(false);
+  useEffect(() => {
+    if (!narrowLayout || tasksPanelCollapsed) {
+      setTasksPanelCollapsePointerGuard(false);
+      return;
+    }
+    setTasksPanelCollapsePointerGuard(true);
+    const id = window.setTimeout(() => setTasksPanelCollapsePointerGuard(false), 500);
+    return () => window.clearTimeout(id);
+  }, [narrowLayout, tasksPanelCollapsed]);
+
   return (
     <>
     <div
@@ -1325,6 +1389,7 @@ export default function PageBlockEditor({
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
+        position: "relative",
       }}
     >
       <div
@@ -1337,7 +1402,7 @@ export default function PageBlockEditor({
           flexDirection: "column",
         }}
       >
-        {editing && (
+        {editing && (!narrowLayout || narrowMobileToolbarOpen) && (
           <div
             style={{
               position: "sticky",
@@ -1354,6 +1419,25 @@ export default function PageBlockEditor({
               boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
             }}
           >
+          {narrowLayout && (
+            <button
+              type="button"
+              onClick={() => setNarrowMobileToolbarOpen(false)}
+              style={{
+                marginRight: "auto",
+                padding: "6px 12px",
+                borderRadius: 8,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-secondary)",
+                color: "var(--text-primary)",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Done
+            </button>
+          )}
           <button
             type="button"
             aria-label="Undo"
@@ -1517,6 +1601,7 @@ export default function PageBlockEditor({
             onChange={setLinkTargetId}
             pageRootTaskId={pageLinkedRootTaskId}
             title="Task to attach to selection"
+            compact={narrowLayout}
           />
           <button
             type="button"
@@ -1563,7 +1648,12 @@ export default function PageBlockEditor({
               ref={editorRef}
               contentEditable={editing}
               suppressContentEditableWarning
-              onBlur={commitHtml}
+              onBlur={() => {
+                window.setTimeout(() => {
+                  if (document.activeElement === editorRef.current) return;
+                  commitHtml();
+                }, 0);
+              }}
               onInput={() => {
                 setTick((x) => x + 1);
                 requestAnimationFrame(measureGutter);
@@ -1572,9 +1662,9 @@ export default function PageBlockEditor({
               onKeyUp={() => requestAnimationFrame(measureGutter)}
               className="page-flow-editor"
               style={{
-                maxWidth: 720,
+                maxWidth: narrowLayout ? "100%" : 720,
                 margin: "0 auto",
-                padding: "4px 16px 48px",
+                padding: narrowLayout ? "4px 10px 28px" : "4px 16px 48px",
                 minHeight: "100%",
                 outline: "none",
                 fontSize: 15,
@@ -1586,6 +1676,8 @@ export default function PageBlockEditor({
             />
           </div>
 
+          {tasksPanelVisible && !narrowLayout && (
+            <>
           <div
             title="Drag to resize tasks panel"
             role="separator"
@@ -1603,7 +1695,6 @@ export default function PageBlockEditor({
               if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
                 e.preventDefault();
                 const step = e.shiftKey ? 32 : 8;
-                // ArrowRight should SHRINK the panel; ArrowLeft should EXPAND it.
                 const delta = e.key === "ArrowRight" ? -step : step;
                 setTasksPanelWidth((w) => {
                   const next = Math.round(
@@ -1757,6 +1848,8 @@ export default function PageBlockEditor({
               ))
             )}
           </div>
+            </>
+          )}
           {thumbPanel &&
             thumbHostTask &&
             thumbRootTask &&
@@ -1916,6 +2009,142 @@ export default function PageBlockEditor({
             )}
         </div>
       </div>
+
+      {narrowLayout && tasksPanelVisible && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 90,
+            background: "var(--bg-primary)",
+            display: "flex",
+            flexDirection: "column",
+            overflow: "auto",
+          }}
+        >
+          <div
+            style={{
+              position: "sticky",
+              top: 0,
+              zIndex: 91,
+              background: "var(--bg-secondary)",
+              padding: "8px 10px",
+              borderBottom: "1px solid var(--border-subtle)",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <button
+              type="button"
+              title="Close tasks panel"
+              aria-label="Close tasks panel"
+              onClick={() => setTasksPanelCollapsed(true)}
+              style={{
+                width: 32,
+                height: 32,
+                padding: 0,
+                borderRadius: 6,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-tertiary)",
+                color: "var(--text-secondary)",
+                cursor: "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                pointerEvents: tasksPanelCollapsePointerGuard ? "none" : "auto",
+              }}
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>
+              Linked Tasks
+            </span>
+            <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+              <button
+                type="button"
+                title="Collapse all subtasks"
+                aria-label="Collapse all subtasks"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  setGlobalSubtasksMode("collapsed");
+                  setGlobalSubtasksVersion((v) => v + 1);
+                }}
+                style={{
+                  width: 22,
+                  height: 22,
+                  padding: 0,
+                  borderRadius: 4,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-tertiary)",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
+                <ChevronRight size={14} />
+              </button>
+              <button
+                type="button"
+                title="Expand all subtasks"
+                aria-label="Expand all subtasks"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  setGlobalSubtasksMode("expanded");
+                  setGlobalSubtasksVersion((v) => v + 1);
+                }}
+                style={{
+                  width: 22,
+                  height: 22,
+                  padding: 0,
+                  borderRadius: 4,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-tertiary)",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
+                <ChevronDown size={14} />
+              </button>
+            </div>
+          </div>
+          <div style={{ padding: "6px 10px" }}>
+            {markers.length === 0 ? (
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--text-muted)",
+                  fontStyle: "italic",
+                  padding: "8px 2px",
+                }}
+              >
+                Linked tasks appear here. Highlight text and use &ldquo;Link to task&rdquo; to connect tasks.
+              </div>
+            ) : (
+              markers.map((m, i) => (
+                <PageLinkedTaskGutterCard
+                  key={m.linkId}
+                  m={m}
+                  markerIndex={i}
+                  tasks={tasks}
+                  sections={sections}
+                  pageLinkedRootTaskId={pageLinkedRootTaskId}
+                  editing={editing}
+                  updateTask={updateTask}
+                  onRemoveLink={removeLinkById}
+                  addWorkspaceUrl={addWorkspaceUrl}
+                  onOpenNotes={setNotesTaskId}
+                  thumbnailsExpanded={thumbnailsExpanded}
+                  globalSubtasksMode={globalSubtasksMode}
+                  globalSubtasksVersion={globalSubtasksVersion}
+                  onExpandThumbnails={(markerLinkId, hostTaskId, rootTaskId) =>
+                    setThumbnailsExpanded((v) => !v)
+                  }
+                />
+              ))
+            )}
+          </div>
+        </div>
+      )}
     </div>
     <TaskNotesModal
       open={notesTaskId !== null}

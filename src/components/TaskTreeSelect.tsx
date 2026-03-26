@@ -20,6 +20,8 @@ type TaskTreeSelectProps = {
   placeholder?: string;
   disabled?: boolean;
   title?: string;
+  /** Narrow toolbars: allow trigger to shrink so labels are less clipped. */
+  compact?: boolean;
 };
 
 function indentPadding(task: TaskItem, pageRootTaskId: string | null, rootDepth: number): number {
@@ -38,6 +40,7 @@ export default function TaskTreeSelect({
   placeholder = "Choose task",
   disabled,
   title,
+  compact = false,
 }: TaskTreeSelectProps) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -85,9 +88,9 @@ export default function TaskTreeSelect({
       ref={wrapRef}
       style={{
         position: "relative",
-        minWidth: TRIGGER_MIN_WIDTH,
-        maxWidth: TRIGGER_MAX_WIDTH,
-        flex: "1 1 auto",
+        minWidth: compact ? 0 : TRIGGER_MIN_WIDTH,
+        maxWidth: compact ? "100%" : TRIGGER_MAX_WIDTH,
+        flex: compact ? "1 1 100%" : "1 1 auto",
       }}
     >
       <button
@@ -100,8 +103,8 @@ export default function TaskTreeSelect({
           alignItems: "center",
           gap: 6,
           width: "100%",
-          minWidth: TRIGGER_MIN_WIDTH,
-          maxWidth: TRIGGER_MAX_WIDTH,
+          minWidth: compact ? 0 : TRIGGER_MIN_WIDTH,
+          maxWidth: compact ? "100%" : TRIGGER_MAX_WIDTH,
           fontSize: 11,
           padding: "4px 8px",
           borderRadius: 6,

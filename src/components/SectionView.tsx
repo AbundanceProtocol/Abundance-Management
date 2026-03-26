@@ -6,7 +6,12 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { Section, TaskItem, TopLevelSort, SectionType } from "@/lib/types";
-import { buildVisibleTaskTree } from "@/lib/timelineUtils";
+import {
+  buildFlatTasksGroupedByCategory,
+  buildVisibleTaskTree,
+  coerceTopLevelSort,
+  normalizeCategoryKey,
+} from "@/lib/timelineUtils";
 import {
   filterTasksForMainView,
   dueBucketForTask,
@@ -21,6 +26,29 @@ function dueDateTimeLabel(t: TaskItem): string {
   const tm = formatDueTimeDisplay(t.dueTime);
   if (!t.dueDate?.trim()) return tm || "";
   return tm ? `${t.dueDate} · ${tm}` : t.dueDate;
+}
+
+function categoryHeaderLabelsForRow(
+  flatTasks: TaskItem[],
+  groupByCategory: boolean
+): Map<string, string | null> {
+  const map = new Map<string, string | null>();
+  if (!groupByCategory) return map;
+  let prev: string | null = null;
+  for (const t of flatTasks) {
+    if (t.parentId !== null) {
+      map.set(t._id, null);
+      continue;
+    }
+    const k = normalizeCategoryKey(t);
+    if (k !== prev) {
+      prev = k;
+      map.set(t._id, k || "Uncategorized");
+    } else {
+      map.set(t._id, null);
+    }
+  }
+  return map;
 }
 
 interface Props {
@@ -219,15 +247,31 @@ export default function SectionView({
     return sectionTasksMain.filter((t) => todayFocusVisibleIds.has(t._id));
   }, [sectionTasksMain, showTodayFocusOnly, todayFocusVisibleIds]);
 
+  const topSort = useMemo(
+    () => coerceTopLevelSort(section.topLevelSort ?? "manual"),
+    [section.topLevelSort]
+  );
+
   const flatTasksTree = useMemo(
     () =>
-      buildVisibleTaskTree(
-        sectionTasksMainEffective,
-        null,
-        collapsedIds,
-        section.topLevelSort ?? "manual"
-      ),
-    [sectionTasksMainEffective, collapsedIds, section.topLevelSort]
+      section.groupByCategory
+        ? buildFlatTasksGroupedByCategory(
+            sectionTasksMainEffective,
+            collapsedIds,
+            topSort
+          )
+        : buildVisibleTaskTree(
+            sectionTasksMainEffective,
+            null,
+            collapsedIds,
+            topSort
+          ),
+    [
+      sectionTasksMainEffective,
+      collapsedIds,
+      section.groupByCategory,
+      topSort,
+    ]
   );
 
   const flatTasks = useMemo(
@@ -240,17 +284,19 @@ export default function SectionView({
 
   const flatTasksUndatedTree = useMemo(
     () =>
-      buildVisibleTaskTree(
-        sectionTasksUndatedRoots,
-        null,
-        collapsedIdsUndated,
-        section.topLevelSort ?? "manual"
-      ),
-    [
-      sectionTasksUndatedRoots,
-      collapsedIdsUndated,
-      section.topLevelSort,
-    ]
+      section.groupByCategory
+        ? buildFlatTasksGroupedByCategory(
+            sectionTasksUndated,
+            collapsedIdsUndated,
+            topSort
+          )
+        : buildVisibleTaskTree(
+            sectionTasksUndated,
+            null,
+            collapsedIdsUndated,
+            topSort
+          ),
+    [sectionTasksUndated, collapsedIdsUndated, section.groupByCategory, topSort]
   );
 
   const flatTasksUndated = useMemo(
@@ -266,6 +312,21 @@ export default function SectionView({
   );
 
   const taskIds = useMemo(() => flatTasks.map((t) => t._id), [flatTasks]);
+
+  const categoryHeadersByTaskId = useMemo(
+    () =>
+      categoryHeaderLabelsForRow(flatTasks, section.groupByCategory ?? false),
+    [flatTasks, section.groupByCategory]
+  );
+
+  const categoryHeadersUndatedByTaskId = useMemo(
+    () =>
+      categoryHeaderLabelsForRow(
+        flatTasksUndated,
+        section.groupByCategory ?? false
+      ),
+    [flatTasksUndated, section.groupByCategory]
+  );
 
   const undatedTaskIds = useMemo(
     () => flatTasksUndated.map((t) => t._id),
@@ -448,14 +509,14 @@ export default function SectionView({
           </button>
 
           <select
-            value={section.topLevelSort ?? "manual"}
+            value={topSort}
             onChange={(e) =>
               onUpdateSection({
                 _id: section._id,
                 topLevelSort: e.target.value as TopLevelSort,
               })
             }
-            title="Sort top-level tasks (nested subtasks keep manual order)"
+            title="Order top-level tasks within each category group (or the full list when grouping is off). Subtasks keep manual order."
             style={{
               fontSize: 11,
               padding: "4px 8px",
@@ -464,13 +525,41 @@ export default function SectionView({
               background: "var(--bg-tertiary)",
               color: "var(--text-secondary)",
               cursor: "pointer",
-              maxWidth: 148,
+              maxWidth: 160,
             }}
           >
             <option value="manual">Order (manual)</option>
             <option value="priority">Priority</option>
             <option value="startDate">Start date</option>
           </select>
+
+          <button
+            type="button"
+            onClick={() =>
+              onUpdateSection({
+                _id: section._id,
+                groupByCategory: !section.groupByCategory,
+              })
+            }
+            aria-pressed={section.groupByCategory ?? false}
+            title="Show category headings and group top-level tasks by category"
+            style={{
+              fontSize: 11,
+              padding: "4px 8px",
+              borderRadius: 6,
+              border: "1px solid var(--border-color)",
+              background: section.groupByCategory
+                ? "rgba(59, 130, 246, 0.15)"
+                : "var(--bg-tertiary)",
+              color: section.groupByCategory
+                ? "var(--accent-blue)"
+                : "var(--text-secondary)",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            Group by category
+          </button>
         </div>
 
         <div className="section-header-spacer" style={{ flex: 1, minWidth: 8 }} />
@@ -662,6 +751,9 @@ export default function SectionView({
                     task.parentId === null ? section.isSequential : undefined
                   }
                   sectionType={section.type}
+                  categoryGroupHeader={
+                    categoryHeadersByTaskId.get(task._id) ?? null
+                  }
                 />
                 <NestDropZone taskId={task._id} />
               </React.Fragment>
@@ -731,6 +823,9 @@ export default function SectionView({
                         task.parentId === null ? section.isSequential : undefined
                       }
                       sectionType={section.type}
+                      categoryGroupHeader={
+                        categoryHeadersUndatedByTaskId.get(task._id) ?? null
+                      }
                     />
                     <NestDropZone taskId={task._id} />
                   </React.Fragment>

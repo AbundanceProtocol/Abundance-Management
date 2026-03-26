@@ -121,6 +121,101 @@ export function computeNestMove(
 }
 
 /**
+ * Move `activeTask` to top level (last among roots in its section). Returns null if already root.
+ */
+export function computePromoteToRoot(
+  tasks: TaskItem[],
+  activeTask: TaskItem
+): ReorderItem[] | null {
+  if (activeTask.parentId === null) return null;
+
+  const sectionId = activeTask.sectionId;
+  const descendants = collectDescendants(activeTask._id, tasks);
+  const depthDelta = -activeTask.depth;
+
+  for (const d of descendants) {
+    if (d.depth + depthDelta > MAX_TASK_DEPTH) return null;
+  }
+
+  const updates: ReorderItem[] = [];
+  const oldParentId = activeTask.parentId;
+  const oldSectionId = activeTask.sectionId;
+
+  const oldSiblings = tasks
+    .filter(
+      (t) =>
+        t.sectionId === oldSectionId &&
+        t.parentId === oldParentId &&
+        t._id !== activeTask._id
+    )
+    .sort((a, b) => a.order - b.order);
+  oldSiblings.forEach((t, i) => {
+    updates.push({
+      _id: t._id,
+      order: i,
+      parentId: oldParentId,
+      depth: t.depth,
+      sectionId: oldSectionId,
+    });
+  });
+
+  const roots = tasks
+    .filter(
+      (t) =>
+        t.sectionId === sectionId &&
+        t.parentId === null &&
+        t._id !== activeTask._id
+    )
+    .sort((a, b) => a.order - b.order);
+
+  const order = roots.length;
+
+  updates.push({
+    _id: activeTask._id,
+    order,
+    parentId: null,
+    depth: 0,
+    sectionId,
+  });
+
+  for (const d of descendants) {
+    updates.push({
+      _id: d._id,
+      order: d.order,
+      parentId: d.parentId,
+      depth: d.depth + depthDelta,
+      sectionId,
+    });
+  }
+
+  return mergeUpdatesById(updates);
+}
+
+/**
+ * Reparent `activeTask` under `newParentId`, or to top level when `newParentId` is null.
+ * Same section only; cannot parent under self or own descendants.
+ */
+export function computeReparentToParent(
+  tasks: TaskItem[],
+  activeTask: TaskItem,
+  newParentId: string | null
+): ReorderItem[] | null {
+  if (newParentId === activeTask.parentId) return null;
+
+  if (newParentId === null) {
+    return computePromoteToRoot(tasks, activeTask);
+  }
+
+  const parent = tasks.find((t) => t._id === newParentId);
+  if (!parent) return null;
+  if (parent.sectionId !== activeTask.sectionId) return null;
+  if (activeTask._id === newParentId) return null;
+  if (isUnderTask(tasks, newParentId, activeTask._id)) return null;
+
+  return computeNestMove(tasks, activeTask, parent);
+}
+
+/**
  * Same parent as `over`: insert active before over among siblings.
  * Renumbers old parent when moving between parents; shifts subtree depths.
  */

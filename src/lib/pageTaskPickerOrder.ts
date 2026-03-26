@@ -1,4 +1,9 @@
-import { buildVisibleTaskTree, flattenTasksTree, tasksInSection } from "@/lib/timelineUtils";
+import {
+  buildVisibleTaskTree,
+  coerceTopLevelSort,
+  flattenTasksTree,
+  tasksInSection,
+} from "@/lib/timelineUtils";
 import type { Section, TaskItem } from "@/lib/types";
 
 function isDescendantOf(tasks: TaskItem[], taskId: string, ancestorId: string): boolean {
@@ -29,7 +34,7 @@ export function orderTasksForPageLinkPicker(
       (t) => t._id === linkedRootId || isDescendantOf(tasks, t._id, linkedRootId)
     );
     const section = sections.find((s) => s._id === root.sectionId);
-    const topLevelSort = section?.topLevelSort ?? "manual";
+    const topLevelSort = coerceTopLevelSort(section?.topLevelSort ?? "manual");
     const descendants = buildVisibleTaskTree(allowed, linkedRootId, new Set(), topLevelSort);
     return [root, ...descendants];
   }
@@ -38,7 +43,9 @@ export function orderTasksForPageLinkPicker(
   const out: TaskItem[] = [];
   for (const sec of sectionSorted) {
     const inSec = tasksInSection(tasks, sec._id);
-    out.push(...flattenTasksTree(inSec, sec.topLevelSort ?? "manual"));
+    out.push(
+      ...flattenTasksTree(inSec, coerceTopLevelSort(sec.topLevelSort ?? "manual"))
+    );
   }
   return out;
 }

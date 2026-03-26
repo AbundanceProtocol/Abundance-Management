@@ -3,9 +3,11 @@
 import React, { useMemo, useState, useEffect, useRef } from "react";
 import { Section, TaskItem } from "@/lib/types";
 import {
+  buildFlatTasksGroupedByCategory,
   buildProjectRanges,
   buildVisibleTaskTree,
   compareSiblingOrder,
+  coerceTopLevelSort,
   hasExplicitStartDate,
   tasksInSection,
   formatMonthShort,
@@ -180,17 +182,26 @@ export default function CriticalPathTimeline({
     }
   }, [allSectionTasks]);
 
-  const topLevelSort = section.topLevelSort ?? "manual";
+  const topLevelSort = useMemo(
+    () => coerceTopLevelSort(section.topLevelSort ?? "manual"),
+    [section.topLevelSort]
+  );
 
   const visibleTaskIds = useMemo(() => {
-    const visible = buildVisibleTaskTree(
-      allSectionTasks,
-      null,
-      chartCollapsedIds,
-      topLevelSort
-    );
+    const visible = section.groupByCategory
+      ? buildFlatTasksGroupedByCategory(
+          allSectionTasks,
+          chartCollapsedIds,
+          topLevelSort
+        )
+      : buildVisibleTaskTree(
+          allSectionTasks,
+          null,
+          chartCollapsedIds,
+          topLevelSort
+        );
     return new Set(visible.map((t) => t._id));
-  }, [allSectionTasks, chartCollapsedIds, topLevelSort]);
+  }, [allSectionTasks, chartCollapsedIds, topLevelSort, section.groupByCategory]);
 
   const projectRangesBuilt = useMemo(
     () => buildProjectRanges(allSectionTasks, section),
@@ -262,9 +273,15 @@ export default function CriticalPathTimeline({
 
   const barFillForTask = useMemo(() => {
     const taskById = new Map(allSectionTasks.map((t) => [t._id, t]));
-    const rootsOrdered = allSectionTasks
-      .filter((t) => t.parentId === null)
-      .sort((a, b) => compareSiblingOrder(a, b, true, topLevelSort));
+    const rootsOrdered = section.groupByCategory
+      ? buildFlatTasksGroupedByCategory(
+          allSectionTasks,
+          chartCollapsedIds,
+          topLevelSort
+        ).filter((t) => t.parentId === null)
+      : allSectionTasks
+          .filter((t) => t.parentId === null)
+          .sort((a, b) => compareSiblingOrder(a, b, true, topLevelSort));
     const rootColorIndex = new Map<string, number>();
     rootsOrdered.forEach((root, i) => rootColorIndex.set(root._id, i));
 
@@ -273,7 +290,12 @@ export default function CriticalPathTimeline({
       const paletteIndex = rootColorIndex.get(root._id) ?? 0;
       return fillForDepthPalette(paletteIndex, task.depth);
     };
-  }, [allSectionTasks, topLevelSort]);
+  }, [
+    allSectionTasks,
+    chartCollapsedIds,
+    topLevelSort,
+    section.groupByCategory,
+  ]);
 
   const criticalChain = useMemo(() => {
     const c = ranges

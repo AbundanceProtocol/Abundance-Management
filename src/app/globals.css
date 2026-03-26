@@ -90,8 +90,35 @@ button {
   opacity: 1 !important;
 }
 
+/* Touch / coarse pointers: no hover, so keep drag handle and row actions visible */
+@media (hover: none) and (pointer: coarse) {
+  .task-row-inner .drag-handle,
+  .task-row-inner .task-actions {
+    opacity: 1 !important;
+  }
+
+  .task-row-inner .drag-handle {
+    touch-action: none;
+    min-width: 36px;
+    min-height: 36px;
+    margin-top: 0;
+    align-self: center;
+    justify-content: center;
+  }
+}
+
 .task-row-inner:hover .task-actions {
   opacity: 1 !important;
+}
+
+/* Narrow screens: overflow (⋮) replaces inline actions — trigger stays visible (no hover) */
+.task-actions-mobile-wrap .task-actions-menu-trigger {
+  opacity: 1 !important;
+}
+
+.task-actions-menu-panel button:hover,
+.task-actions-menu-panel a:hover {
+  background: var(--bg-hover);
 }
 
 /* Prominent zoom chip (board: task only) — always visible, brightens on row hover */

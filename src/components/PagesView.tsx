@@ -1,13 +1,16 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useSearchParams } from "next/navigation";
 import {
   DndContext,
-  PointerSensor,
-  useSensor,
-  useSensors,
   DragStartEvent,
   DragOverEvent,
   DragEndEvent,
@@ -27,8 +30,13 @@ import type { TaskItem } from "@/lib/types";
 import {
   Plus,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Eye,
+  FileText,
+  LayoutGrid,
+  Menu,
+  Check,
   Pencil,
   Trash,
 } from "./Icons";
@@ -43,8 +51,11 @@ import {
   computePageSiblingMoveAfter,
 } from "@/lib/pagesReorder";
 import PageBlockEditor from "./PageBlockEditor";
+import { AppNavTasksPages } from "./AppNavTasksPages";
 import { emptyPageDocument, parsePageBody, serializePageDocument } from "@/lib/pageDocument";
 import { orderTasksForPageLinkPicker } from "@/lib/pageTaskPickerOrder";
+import { useBoardDndSensors } from "@/lib/boardDndSensors";
+import { VIEWPORT_NARROW_MQ, useViewportNarrow } from "@/lib/useViewportNarrow";
 
 const NEST_HOVER_MS = 1200;
 const PAGE_NEST_BELOW_PREFIX = "page-nest-below-";
@@ -123,12 +134,50 @@ export default function PagesView() {
   const hoverTargetRef = useRef<string | null>(null);
   const hoverStartRef = useRef<number | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [pagesSidebarMinimized, setPagesSidebarMinimized] = useState(false);
+  const [mobilePagesChromeCollapsed, setMobilePagesChromeCollapsed] = useState(true);
+  const [mobilePaneMetaCollapsed, setMobilePaneMetaCollapsed] = useState(true);
+  const [narrowMobileToolbarOpen, setNarrowMobileToolbarOpen] = useState(false);
+  const [tasksPanelCollapsed, setTasksPanelCollapsed] = useState(true);
+  /** Ignore collapse briefly after open — same tap can hit the panel collapse control after layout shifts. */
+  const ignoreTasksPanelCloseUntilRef = useRef(0);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 5 },
-    })
-  );
+  const setTasksPanelCollapsedSafe = useCallback((collapsed: boolean) => {
+    if (collapsed && Date.now() < ignoreTasksPanelCloseUntilRef.current) {
+      return;
+    }
+    setTasksPanelCollapsed(collapsed);
+  }, []);
+
+  const isNarrowPagesLayout = useViewportNarrow();
+  const sidebarHidden = isNarrowPagesLayout && pagesSidebarMinimized;
+
+  useLayoutEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.matchMedia(VIEWPORT_NARROW_MQ).matches) {
+      setMobilePagesChromeCollapsed(true);
+      setMobilePaneMetaCollapsed(true);
+      setTasksPanelCollapsed(true);
+      setNarrowMobileToolbarOpen(false);
+    }
+  }, []);
+
+  const mobileIconBtn: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 44,
+    height: 44,
+    padding: 0,
+    borderRadius: 10,
+    border: "1px solid var(--border-color)",
+    background: "var(--bg-tertiary)",
+    color: "var(--text-primary)",
+    cursor: "pointer",
+    flexShrink: 0,
+  };
+
+  const sensors = useBoardDndSensors();
 
   const persist = useCallback((next: PagesEnvironment) => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -404,6 +453,8 @@ export default function PagesView() {
   }, [openPageIds, environment.items, tasks, sections]);
 
   const panes = openPageIds.map((id) => getPage(id));
+  const activePage = panes[activePaneIndex] ?? null;
+  const activeEditing = editingByPane[activePaneIndex] ?? false;
 
   if (loading) {
     return (
@@ -416,19 +467,57 @@ export default function PagesView() {
   return (
     <div style={{ display: "flex", height: "100vh", maxHeight: "100vh", overflow: "hidden" }}>
       <aside
+        aria-hidden={sidebarHidden}
         style={{
-          width: 320,
-          borderRight: "1px solid var(--border-color)",
+          width: sidebarHidden ? 0 : 320,
+          minWidth: sidebarHidden ? 0 : 320,
+          maxWidth: sidebarHidden ? 0 : 320,
+          flexShrink: 0,
+          borderRight: sidebarHidden ? "none" : "1px solid var(--border-color)",
           background: "var(--bg-secondary)",
-          overflow: "auto",
+          overflow: sidebarHidden ? "hidden" : "auto",
+          transition: isNarrowPagesLayout
+            ? "width 0.2s ease, min-width 0.2s ease, max-width 0.2s ease"
+            : undefined,
+          pointerEvents: sidebarHidden ? "none" : undefined,
         }}
       >
         <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-subtle)" }}>
-          <div style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 8 }}>
-            <Link href="/" style={{ color: "var(--accent-blue)" }}>
-              Tasks
-            </Link>{" "}
-            / <strong>Pages</strong>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 8,
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <AppNavTasksPages active="pages" />
+            </div>
+            {isNarrowPagesLayout && (
+              <button
+                type="button"
+                onClick={() => setPagesSidebarMinimized(true)}
+                title="Minimize pages panel"
+                aria-label="Minimize pages panel"
+                style={{
+                  flexShrink: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 40,
+                  height: 40,
+                  padding: 0,
+                  borderRadius: 8,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-tertiary)",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                }}
+              >
+                <ChevronLeft size={18} />
+              </button>
+            )}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button type="button" onClick={() => addPage(null)} style={{ fontSize: 12 }}>
@@ -490,35 +579,188 @@ export default function PagesView() {
           overflow: "hidden",
         }}
       >
-        <header
-          style={{
-            borderBottom: "1px solid var(--border-color)",
-            padding: "14px 16px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 8,
-          }}
-        >
-          <h1 style={{ margin: 0, fontSize: 20 }}>Pages</h1>
-          <div style={{ display: "flex", gap: 6 }}>
-            {[1, 2, 3, 4].map((n) => (
+        {isNarrowPagesLayout && mobilePagesChromeCollapsed ? (
+          <div
+            style={{
+              flexShrink: 0,
+              padding: "6px 10px",
+              borderBottom: "1px solid var(--border-color)",
+              background: "var(--bg-secondary)",
+              display: "flex",
+              flexDirection: "row",
+              flexWrap: "nowrap",
+              alignItems: "center",
+              gap: 8,
+              overflowX: "auto",
+              overflowY: "hidden",
+              WebkitOverflowScrolling: "touch",
+            }}
+          >
+            {sidebarHidden && (
               <button
-                key={n}
                 type="button"
-                onClick={() => setPaneCount(n as 1 | 2 | 3 | 4)}
+                onClick={() => setPagesSidebarMinimized(false)}
+                title="Pages list"
+                aria-label="Pages list"
+                style={mobileIconBtn}
+              >
+                <FileText size={20} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setMobilePagesChromeCollapsed(false)}
+              title="Panes and layout"
+              aria-label="Panes and layout"
+              style={mobileIconBtn}
+            >
+              <LayoutGrid size={20} />
+            </button>
+            {activePage && mobilePaneMetaCollapsed && (
+              <button
+                type="button"
+                onClick={() => setMobilePaneMetaCollapsed(false)}
+                title="Page title and root task"
+                aria-label="Page title and root task"
+                style={mobileIconBtn}
+              >
+                <Menu size={20} />
+              </button>
+            )}
+            {activePage && activeEditing && !narrowMobileToolbarOpen && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setNarrowMobileToolbarOpen(true)}
+                  title="Formatting and link to task"
+                  aria-label="Formatting and link to task"
+                  style={mobileIconBtn}
+                >
+                  <Pencil size={20} />
+                </button>
+                <button
+                  type="button"
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    // Open + ignore window before layout shift so a trailing click cannot hit the panel collapse.
+                    ignoreTasksPanelCloseUntilRef.current = Date.now() + 1200;
+                    setTasksPanelCollapsed(false);
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    ignoreTasksPanelCloseUntilRef.current = Date.now() + 1200;
+                    setTasksPanelCollapsed(false);
+                  }}
+                  title="Linked tasks"
+                  aria-label="Linked tasks"
+                  style={mobileIconBtn}
+                >
+                  <Check size={20} />
+                </button>
+              </>
+            )}
+          </div>
+        ) : (
+          <>
+            {sidebarHidden && (
+              <div
                 style={{
-                  padding: "6px 10px",
-                  borderRadius: 6,
-                  border: "1px solid var(--border-color)",
-                  background: paneCount === n ? "var(--bg-tertiary)" : "transparent",
+                  flexShrink: 0,
+                  padding: isNarrowPagesLayout ? "6px 10px" : "10px 16px",
+                  borderBottom: "1px solid var(--border-color)",
+                  background: "var(--bg-secondary)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
                 }}
               >
-                {n}
-              </button>
-            ))}
-          </div>
-        </header>
+                {isNarrowPagesLayout ? (
+                  <button
+                    type="button"
+                    onClick={() => setPagesSidebarMinimized(false)}
+                    title="Pages list"
+                    aria-label="Pages list"
+                    style={mobileIconBtn}
+                  >
+                    <FileText size={20} />
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setPagesSidebarMinimized(false)}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "8px 12px",
+                        borderRadius: 8,
+                        border: "1px solid var(--border-color)",
+                        background: "var(--bg-tertiary)",
+                        color: "var(--text-primary)",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <ChevronRight size={16} />
+                      Pages list
+                    </button>
+                    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                      Open the tree to switch pages
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
+            <header
+              style={{
+                borderBottom: "1px solid var(--border-color)",
+                padding: "10px 14px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                {isNarrowPagesLayout && (
+                  <button
+                    type="button"
+                    onClick={() => setMobilePagesChromeCollapsed(true)}
+                    title="Minimize header"
+                    aria-label="Minimize header"
+                    style={{
+                      ...mobileIconBtn,
+                      width: 40,
+                      height: 40,
+                    }}
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+                )}
+                <h1 style={{ margin: 0, fontSize: isNarrowPagesLayout ? 17 : 20 }}>Pages</h1>
+              </div>
+              <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                {[1, 2, 3, 4].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setPaneCount(n as 1 | 2 | 3 | 4)}
+                    style={{
+                      padding: "6px 10px",
+                      borderRadius: 6,
+                      border: "1px solid var(--border-color)",
+                      background: paneCount === n ? "var(--bg-tertiary)" : "transparent",
+                    }}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </header>
+          </>
+        )}
 
         <div
           style={{
@@ -555,6 +797,33 @@ export default function PagesView() {
                   background: activePaneIndex === paneIdx ? "rgba(59,130,246,0.03)" : "transparent",
                 }}
               >
+                {page && isNarrowPagesLayout && mobilePaneMetaCollapsed ? (
+                  mobilePagesChromeCollapsed ? null : (
+                    <div
+                      style={{
+                        flexShrink: 0,
+                        position: "sticky",
+                        top: 0,
+                        zIndex: 25,
+                        borderBottom: "1px solid var(--border-subtle)",
+                        padding: "6px 8px",
+                        display: "flex",
+                        justifyContent: "flex-end",
+                        background: "var(--bg-primary)",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setMobilePaneMetaCollapsed(false)}
+                        title="Page title and root task"
+                        aria-label="Page title and root task"
+                        style={mobileIconBtn}
+                      >
+                        <Menu size={18} />
+                      </button>
+                    </div>
+                  )
+                ) : (
                 <div
                   style={{
                     flexShrink: 0,
@@ -564,15 +833,41 @@ export default function PagesView() {
                     borderBottom: "1px solid var(--border-subtle)",
                     padding: "8px 10px",
                     display: "flex",
-                    alignItems: "center",
+                    flexDirection: isNarrowPagesLayout ? "column" : "row",
+                    alignItems: isNarrowPagesLayout ? "stretch" : "center",
                     justifyContent: "space-between",
                     gap: 8,
                     background: "var(--bg-primary)",
                   }}
                 >
-                  <div style={{ fontSize: 13, fontWeight: 600, minWidth: 0, flex: 1 }}>
+                  {isNarrowPagesLayout && page && (
+                    <button
+                      type="button"
+                      onClick={() => setMobilePaneMetaCollapsed(true)}
+                      title="Minimize page bar"
+                      aria-label="Minimize page bar"
+                      style={{ ...mobileIconBtn, alignSelf: "flex-start", width: 40, height: 40 }}
+                    >
+                      <ChevronLeft size={18} />
+                    </button>
+                  )}
+                  <div
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      minWidth: 0,
+                      flex: isNarrowPagesLayout ? undefined : 1,
+                      width: isNarrowPagesLayout ? "100%" : undefined,
+                    }}
+                  >
                     {page ? (
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6 }}>
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: isNarrowPagesLayout ? "1fr" : "1fr auto",
+                          gap: 8,
+                        }}
+                      >
                         <input
                           value={page.title}
                           onChange={(e) => updatePage(page.id, { title: e.target.value })}
@@ -594,7 +889,12 @@ export default function PagesView() {
                             });
                           }}
                           title="Link page to root task"
-                          style={{ fontSize: 12, maxWidth: 190 }}
+                          style={{
+                            fontSize: 12,
+                            maxWidth: isNarrowPagesLayout ? "100%" : 190,
+                            width: isNarrowPagesLayout ? "100%" : undefined,
+                            minWidth: 0,
+                          }}
                         >
                           <option value="">No root task</option>
                           {tasks.map((t) => {
@@ -614,7 +914,42 @@ export default function PagesView() {
                     )}
                   </div>
                   {page && (
-                    <div style={{ display: "flex", gap: 6 }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 6,
+                        alignSelf: isNarrowPagesLayout ? "flex-end" : undefined,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {isNarrowPagesLayout && editing && (
+                        <button
+                          type="button"
+                          title="Linked tasks"
+                          aria-label="Linked tasks"
+                          onPointerDown={(e) => {
+                            e.stopPropagation();
+                            ignoreTasksPanelCloseUntilRef.current = Date.now() + 1200;
+                            setTasksPanelCollapsed(false);
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            ignoreTasksPanelCloseUntilRef.current = Date.now() + 1200;
+                            setTasksPanelCollapsed(false);
+                          }}
+                          style={{
+                            border: "1px solid var(--border-color)",
+                            borderRadius: 6,
+                            background: tasksPanelCollapsed ? "transparent" : "var(--bg-tertiary)",
+                            padding: 6,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          <Check size={18} />
+                        </button>
+                      )}
                       <button
                         type="button"
                         title="Edit"
@@ -682,6 +1017,7 @@ export default function PagesView() {
                     </div>
                   )}
                 </div>
+                )}
 
                 {!page ? (
                   <div style={{ padding: 16, color: "var(--text-muted)", fontStyle: "italic" }}>
@@ -694,11 +1030,16 @@ export default function PagesView() {
                     body={page.body}
                     onChange={(serialized) => updatePage(page.id, { body: serialized })}
                     editing={editing}
+                    layoutNarrow={isNarrowPagesLayout}
                     linkTaskOptions={linkTaskOptions}
                     pageLinkedRootTaskId={page.linkedTaskId ?? null}
                     tasks={tasks}
                     sections={sections}
                     updateTask={updateTask}
+                    tasksPanelCollapsed={tasksPanelCollapsed}
+                    onTasksPanelCollapsedChange={setTasksPanelCollapsedSafe}
+                    narrowMobileToolbarOpen={narrowMobileToolbarOpen}
+                    onNarrowMobileToolbarOpenChange={setNarrowMobileToolbarOpen}
                   />
                 )}
               </section>

@@ -1,8 +1,24 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { TaskItem, TimeUnit, TaskPriority, Section, RepeatFrequency } from "@/lib/types";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
+import {
+  TaskItem,
+  TimeUnit,
+  TaskPriority,
+  Section,
+  SectionType,
+  RepeatFrequency,
+} from "@/lib/types";
+import {
+  computeNestMove,
+  computeReparentToParent,
+  isUnderTask,
+  type ReorderItem,
+} from "@/lib/dndReorder";
+import { coerceTopLevelSort, flattenTasksTree } from "@/lib/timelineUtils";
+import { MAX_TASK_DEPTH } from "@/lib/constants";
 import type { MarkdownPageItem, PagesEnvironment } from "@/lib/pagesTypes";
+import { emptyPageDocument, serializePageDocument } from "@/lib/pageDocument";
 import {
   Clock,
   Calendar,
@@ -25,9 +41,29 @@ interface Props {
   /** Duplicate this task and its subtree as siblings below; optional. */
   onDuplicate?: () => void | Promise<void>;
   duplicateBusy?: boolean;
+  /** All tasks (for parent picker & reparent). */
+  tasks?: TaskItem[];
+  reorderTasks?: (updates: ReorderItem[]) => Promise<void>;
+  createTask?: (
+    sectionId: string,
+    parentId: string | null,
+    depth: number,
+    sectionType?: SectionType
+  ) => Promise<TaskItem>;
+  /** Open a task after creating a subtask (e.g. select in panel). */
+  onNavigateToTask?: (taskId: string) => void;
 }
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** Labels for tree `<option>`s: native selects collapse normal spaces — use em space + branch glyph. */
+function formatTaskTreeOptionLabel(t: TaskItem): string {
+  const title = t.title.trim() || "Untitled";
+  const d = Math.min(t.depth ?? 0, 32);
+  const indent = "\u2003".repeat(d);
+  const branch = d > 0 ? "\u21B3\u00A0" : "";
+  return `${indent}${branch}${title}`;
+}
 
 export default function TaskDetailPanel({
   task,
@@ -37,6 +73,10 @@ export default function TaskDetailPanel({
   directChildCount,
   onDuplicate,
   duplicateBusy = false,
+  tasks,
+  reorderTasks,
+  createTask,
+  onNavigateToTask,
 }: Props) {
   const [activeTodayFocusYmd, setActiveTodayFocusYmd] = useState(() =>
     getActiveTodayFocusYmd()
@@ -62,6 +102,116 @@ export default function TaskDetailPanel({
   const [repeatWeekdays, setRepeatWeekdays] = useState<number[]>(
     () => task.repeatWeekdays?.length ? [...task.repeatWeekdays] : [new Date().getDay()]
   );
+  const [category, setCategory] = useState(() => (task.category ?? "").trim());
+  const [reparentBusy, setReparentBusy] = useState(false);
+  const [createSubtaskBusy, setCreateSubtaskBusy] = useState(false);
+  const [attachBusy, setAttachBusy] = useState(false);
+  const [creatingLinkedPage, setCreatingLinkedPage] = useState(false);
+
+  const sectionTasks = useMemo(
+    () => (tasks ?? []).filter((t) => t.sectionId === task.sectionId),
+    [tasks, task.sectionId]
+  );
+
+  const sectionTopSort = useMemo(
+    () => coerceTopLevelSort(section?.topLevelSort ?? "manual"),
+    [section?.topLevelSort]
+  );
+
+  /** Same depth-first order as the board (sibling order from section sort). */
+  const flatSectionTree = useMemo(
+    () => flattenTasksTree(sectionTasks, sectionTopSort),
+    [sectionTasks, sectionTopSort]
+  );
+
+  const validParentOptions = useMemo(() => {
+    if (!tasks || !section) return [];
+    const validIds = new Set(
+      sectionTasks
+        .filter(
+          (t) =>
+            t._id !== task._id &&
+            !isUnderTask(tasks, t._id, task._id) &&
+            t.depth < MAX_TASK_DEPTH
+        )
+        .map((t) => t._id)
+    );
+    return flatSectionTree.filter((t) => validIds.has(t._id));
+  }, [tasks, section, sectionTasks, flatSectionTree, task]);
+
+  const canNestChildrenUnder = task.depth < MAX_TASK_DEPTH;
+
+  /** Tasks that can be moved to become a (last) child of this task. */
+  const attachableSubtaskOptions = useMemo(() => {
+    if (!tasks || !section || !canNestChildrenUnder) return [];
+    return flatSectionTree.filter((t) => {
+      if (t._id === task._id) return false;
+      const updates = computeNestMove(tasks, t, task);
+      return updates !== null;
+    });
+  }, [tasks, section, flatSectionTree, task, canNestChildrenUnder]);
+
+  const canAddSubtask =
+    Boolean(section && createTask) && task.depth < MAX_TASK_DEPTH;
+
+  const persistPartial = useCallback(
+    (partial: Partial<TaskItem>) => {
+      onUpdate({ _id: task._id, ...partial });
+    },
+    [onUpdate, task._id]
+  );
+
+  const handleParentSelect = useCallback(
+    (newParentId: string | null) => {
+      if (!tasks || !reorderTasks) return;
+      const updates = computeReparentToParent(tasks, task, newParentId);
+      if (!updates?.length) return;
+      setReparentBusy(true);
+      void reorderTasks(updates).finally(() => setReparentBusy(false));
+    },
+    [tasks, reorderTasks, task]
+  );
+
+  const handleCreateNewSubtask = useCallback(async () => {
+    if (!section || !createTask || !canAddSubtask) return;
+    setCreateSubtaskBusy(true);
+    try {
+      const created = await createTask(
+        section._id,
+        task._id,
+        task.depth + 1,
+        section.type
+      );
+      if (task.collapsed) {
+        persistPartial({ collapsed: false });
+      }
+      onNavigateToTask?.(created._id);
+    } finally {
+      setCreateSubtaskBusy(false);
+    }
+  }, [
+    section,
+    createTask,
+    canAddSubtask,
+    task,
+    task.depth,
+    task.collapsed,
+    onNavigateToTask,
+    persistPartial,
+  ]);
+
+  const handleAttachExistingAsSubtask = useCallback(
+    (childId: string) => {
+      if (!tasks || !reorderTasks || !childId) return;
+      const child = tasks.find((t) => t._id === childId);
+      if (!child) return;
+      const updates = computeNestMove(tasks, child, task);
+      if (!updates?.length) return;
+      setAttachBusy(true);
+      void reorderTasks(updates).finally(() => setAttachBusy(false));
+    },
+    [tasks, reorderTasks, task]
+  );
 
   useEffect(() => {
     setTitle(task.title);
@@ -77,6 +227,7 @@ export default function TaskDetailPanel({
     setRepeatWeekdays(
       task.repeatWeekdays?.length ? [...task.repeatWeekdays] : [new Date().getDay()]
     );
+    setCategory((task.category ?? "").trim());
   }, [task]);
 
   useEffect(() => {
@@ -117,10 +268,6 @@ export default function TaskDetailPanel({
     };
   }, []);
 
-  const save = (partial: Partial<TaskItem>) => {
-    onUpdate({ _id: task._id, ...partial });
-  };
-
   const syncPageRootTask = async (pageId: string, taskId: string) => {
     try {
       const res = await fetch("/api/pages");
@@ -138,13 +285,55 @@ export default function TaskDetailPanel({
     }
   };
 
+  const createAndLinkNewRootPage = useCallback(async () => {
+    if (creatingLinkedPage) return;
+    setCreatingLinkedPage(true);
+    try {
+      const res = await fetch("/api/pages");
+      const data = (await res.json()) as PagesEnvironment;
+      const items = data?.items ?? [];
+      const siblings = items.filter((p) => (p.parentId ?? null) === null);
+
+      const pageId =
+        typeof crypto !== "undefined" && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `p-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+      const page: MarkdownPageItem = {
+        id: pageId,
+        title: "New page",
+        body: serializePageDocument(emptyPageDocument()),
+        linkedTaskId: task._id,
+        parentId: null,
+        depth: 0,
+        order: siblings.length,
+      };
+
+      const nextEnv: PagesEnvironment = { items: [...items, page] };
+      await fetch("/api/pages", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(nextEnv),
+      });
+
+      setPages(nextEnv.items);
+      setLinkedPageId(page.id);
+      persistPartial({ linkedPageId: page.id });
+    } catch (e) {
+      console.error(e);
+      alert(e instanceof Error ? e.message : "Failed to create page");
+    } finally {
+      setCreatingLinkedPage(false);
+    }
+  }, [creatingLinkedPage, persistPartial, task._id]);
+
   const commitUrls = () => {
     const cleaned = urls.map((u) => u.trim()).filter(Boolean);
     const prev = (task.urls ?? []).map((u) => u.trim()).filter(Boolean);
     const same =
       cleaned.length === prev.length &&
       cleaned.every((u, i) => u === prev[i]);
-    if (!same) save({ urls: cleaned });
+    if (!same) persistPartial({ urls: cleaned });
     setUrls(cleaned);
   };
 
@@ -232,7 +421,7 @@ export default function TaskDetailPanel({
             onBlur={() => {
               const next = title.trim();
               if (next !== (task.title || "").trim()) {
-                save({ title: next });
+                persistPartial({ title: next });
               }
             }}
             onKeyDown={(e) => {
@@ -252,6 +441,232 @@ export default function TaskDetailPanel({
             }}
           />
         </div>
+
+        {/* Category */}
+        <div>
+          <label
+            style={{
+              display: "block",
+              fontSize: 12,
+              color: "var(--text-secondary)",
+              marginBottom: 6,
+            }}
+          >
+            Category
+          </label>
+          <input
+            type="text"
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            onBlur={() => {
+              const next = category.trim();
+              const prev = (task.category ?? "").trim();
+              if (next !== prev) persistPartial({ category: next });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            }}
+            placeholder="e.g. Work, Personal"
+            style={{
+              width: "100%",
+              fontSize: 14,
+              padding: "8px 10px",
+              borderRadius: 6,
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-primary)",
+              color: "var(--text-primary)",
+              boxSizing: "border-box",
+            }}
+          />
+          <p
+            style={{
+              fontSize: 11,
+              color: "var(--text-muted)",
+              margin: "6px 0 0",
+              lineHeight: 1.4,
+            }}
+          >
+            Use “Group by category” in the section header to show headings and group
+            tasks.
+          </p>
+        </div>
+
+        {tasks && reorderTasks && section && (
+          <div>
+            <label
+              style={{
+                display: "block",
+                fontSize: 12,
+                color: "var(--text-secondary)",
+                marginBottom: 6,
+              }}
+            >
+              Parent task
+            </label>
+            <select
+              disabled={reparentBusy}
+              value={task.parentId ?? ""}
+              onChange={(e) => {
+                const v = e.target.value;
+                handleParentSelect(v === "" ? null : v);
+              }}
+              style={{
+                width: "100%",
+                fontSize: 13,
+                padding: "8px 10px",
+                borderRadius: 6,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-primary)",
+                color: "var(--text-primary)",
+                cursor: reparentBusy ? "wait" : "pointer",
+                boxSizing: "border-box",
+              }}
+            >
+              <option value="">Top level (section root)</option>
+              {validParentOptions.map((t) => (
+                <option key={t._id} value={t._id}>
+                  {formatTaskTreeOptionLabel(t)}
+                </option>
+              ))}
+            </select>
+            <p
+              style={{
+                fontSize: 11,
+                color: "var(--text-muted)",
+                margin: "6px 0 0",
+                lineHeight: 1.4,
+              }}
+            >
+              Make this task a subtask of another task in the same section. Your
+              subtasks move with you.
+            </p>
+          </div>
+        )}
+
+        {section && tasks && reorderTasks && (
+          <div>
+            <label
+              style={{
+                display: "block",
+                fontSize: 12,
+                color: "var(--text-secondary)",
+                marginBottom: 6,
+              }}
+            >
+              Subtasks
+            </label>
+            <label
+              style={{
+                display: "block",
+                fontSize: 11,
+                color: "var(--text-muted)",
+                marginBottom: 4,
+              }}
+            >
+              Attach existing task
+            </label>
+            <select
+              key={`attach-subtask-${task._id}`}
+              aria-busy={attachBusy}
+              disabled={attachBusy || !canNestChildrenUnder}
+              value=""
+              onChange={(e) => {
+                const id = e.target.value;
+                if (id) handleAttachExistingAsSubtask(id);
+              }}
+              style={{
+                width: "100%",
+                fontSize: 13,
+                padding: "8px 10px",
+                borderRadius: 6,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-primary)",
+                color: "var(--text-primary)",
+                cursor:
+                  attachBusy || !canNestChildrenUnder ? "not-allowed" : "pointer",
+                boxSizing: "border-box",
+                marginBottom: 10,
+              }}
+            >
+              <option value="">
+                {attachableSubtaskOptions.length === 0 && canNestChildrenUnder
+                  ? "No other tasks can be moved here"
+                  : "Choose a task to nest under this one…"}
+              </option>
+              {attachableSubtaskOptions.map((t) => (
+                <option key={t._id} value={t._id}>
+                  {formatTaskTreeOptionLabel(t)}
+                </option>
+              ))}
+            </select>
+            {createTask && (
+              <>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: 11,
+                    color: "var(--text-muted)",
+                    marginBottom: 4,
+                  }}
+                >
+                  New subtask
+                </label>
+                <button
+                  type="button"
+                  disabled={!canAddSubtask || createSubtaskBusy}
+                  onClick={() => void handleCreateNewSubtask()}
+                  style={{
+                    width: "100%",
+                    fontSize: 13,
+                    padding: "8px 12px",
+                    borderRadius: 6,
+                    border: "1px solid var(--border-color)",
+                    background:
+                      !canAddSubtask || createSubtaskBusy
+                        ? "var(--bg-primary)"
+                        : "var(--bg-tertiary)",
+                    color: "var(--text-secondary)",
+                    cursor:
+                      !canAddSubtask || createSubtaskBusy
+                        ? "not-allowed"
+                        : "pointer",
+                    fontWeight: 500,
+                  }}
+                >
+                  {createSubtaskBusy
+                    ? "Adding…"
+                    : "Create empty subtask"}
+                </button>
+              </>
+            )}
+            {!canNestChildrenUnder && (
+              <p
+                style={{
+                  fontSize: 11,
+                  color: "var(--accent-amber)",
+                  margin: "8px 0 0",
+                  lineHeight: 1.4,
+                }}
+              >
+                This task is at the maximum depth; you cannot add subtasks
+                under it.
+              </p>
+            )}
+            {canNestChildrenUnder && (
+              <p
+                style={{
+                  fontSize: 11,
+                  color: "var(--text-muted)",
+                  margin: "8px 0 0",
+                  lineHeight: 1.4,
+                }}
+              >
+                Attach moves the chosen task (and its subtasks) to be the last
+                child here. Create adds a new blank row as a child.
+              </p>
+            )}
+          </div>
+        )}
 
         {onDuplicate && (
           <div>
@@ -302,7 +717,7 @@ export default function TaskDetailPanel({
               value={timeEstimate}
               onChange={(e) => setTimeEstimate(e.target.value)}
               onBlur={() =>
-                save({
+                persistPartial({
                   timeEstimate: timeEstimate ? parseInt(timeEstimate) : null,
                 })
               }
@@ -315,7 +730,7 @@ export default function TaskDetailPanel({
               onChange={(e) => {
                 const unit = e.target.value as TimeUnit;
                 setTimeUnit(unit);
-                save({ timeUnit: unit });
+                persistPartial({ timeUnit: unit });
               }}
               style={{ width: 100 }}
             >
@@ -343,7 +758,7 @@ export default function TaskDetailPanel({
             onChange={(e) => {
               const p = e.target.value as TaskPriority;
               setPriority(p);
-              save({ priority: p });
+              persistPartial({ priority: p });
             }}
             style={{ width: "100%", padding: "8px 10px", borderRadius: 6 }}
           >
@@ -363,7 +778,7 @@ export default function TaskDetailPanel({
             value={startDate}
             onChange={(e) => {
               setStartDate(e.target.value);
-              save({ startDate: e.target.value || null });
+              persistPartial({ startDate: e.target.value || null });
             }}
             style={{ width: "100%" }}
           />
@@ -383,12 +798,12 @@ export default function TaskDetailPanel({
               if (!v) {
                 if (section?.type === "todo") {
                   setDueTime("");
-                  save({ dueDate: null, dueTime: null });
+                  persistPartial({ dueDate: null, dueTime: null });
                 } else {
-                  save({ dueDate: null });
+                  persistPartial({ dueDate: null });
                 }
               } else {
-                save({ dueDate: v });
+                persistPartial({ dueDate: v });
               }
             }}
             style={{ width: "100%" }}
@@ -414,7 +829,7 @@ export default function TaskDetailPanel({
                 onChange={(e) => {
                   const v = e.target.value;
                   setDueTime(v);
-                  save({ dueTime: v.trim() ? v : null });
+                  persistPartial({ dueTime: v.trim() ? v : null });
                 }}
                 style={{
                   width: "100%",
@@ -457,7 +872,7 @@ export default function TaskDetailPanel({
               onChange={(e) => {
                 const v = e.target.value;
                 setDueTime(v);
-                save({ dueTime: v.trim() ? v : null });
+                persistPartial({ dueTime: v.trim() ? v : null });
               }}
               style={{
                 width: "100%",
@@ -497,16 +912,16 @@ export default function TaskDetailPanel({
                 const v = e.target.value as RepeatFrequency;
                 setRepeatFrequency(v);
                 if (v === "none") {
-                  save({ repeatFrequency: "none", repeatWeekdays: [] });
+                  persistPartial({ repeatFrequency: "none", repeatWeekdays: [] });
                 } else if (v === "weekly") {
                   const next =
                     repeatWeekdays.length > 0
                       ? repeatWeekdays
                       : [new Date().getDay()];
                   setRepeatWeekdays(next);
-                  save({ repeatFrequency: v, repeatWeekdays: next });
+                  persistPartial({ repeatFrequency: v, repeatWeekdays: next });
                 } else {
-                  save({ repeatFrequency: v, repeatWeekdays: [] });
+                  persistPartial({ repeatFrequency: v, repeatWeekdays: [] });
                 }
               }}
               style={{ width: "100%", padding: "8px 10px", borderRadius: 6 }}
@@ -529,7 +944,7 @@ export default function TaskDetailPanel({
                           ? repeatWeekdays.filter((d) => d !== day)
                           : [...repeatWeekdays, day].sort((a, b) => a - b);
                         setRepeatWeekdays(next);
-                        save({
+                        persistPartial({
                           repeatFrequency: "weekly",
                           repeatWeekdays: next.length ? next : [day],
                         });
@@ -570,12 +985,16 @@ export default function TaskDetailPanel({
               value={linkedPageId}
               onChange={async (e) => {
                 const v = e.target.value;
-                setLinkedPageId(v);
-                save({ linkedPageId: v || null });
-                if (v) {
-                  await syncPageRootTask(v, task._id);
+                const CREATE_VALUE = "__create_new_page__";
+                if (v === CREATE_VALUE) {
+                  await createAndLinkNewRootPage();
+                  return;
                 }
+                setLinkedPageId(v);
+                persistPartial({ linkedPageId: v || null });
+                if (v) await syncPageRootTask(v, task._id);
               }}
+              disabled={creatingLinkedPage}
               style={{ flex: 1, minWidth: 0, padding: "8px 10px", borderRadius: 6 }}
             >
               <option value="">No linked page</option>
@@ -584,10 +1003,13 @@ export default function TaskDetailPanel({
                   {p.title.trim() || "Untitled"}
                 </option>
               ))}
+              <option value="__create_new_page__" style={{ fontStyle: "italic" }}>
+                Create new page…
+              </option>
             </select>
             <button
               type="button"
-              disabled={!linkedPageId}
+              disabled={!linkedPageId || creatingLinkedPage}
               onClick={() => {
                 if (!linkedPageId) return;
                 window.location.href = `/pages?pageId=${encodeURIComponent(linkedPageId)}&taskId=${encodeURIComponent(task._id)}`;
@@ -647,7 +1069,7 @@ export default function TaskDetailPanel({
                     const next = urls.filter((_, j) => j !== i);
                     setUrls(next);
                     const cleaned = next.map((x) => x.trim()).filter(Boolean);
-                    save({ urls: cleaned });
+                    persistPartial({ urls: cleaned });
                   }}
                   style={{
                     flexShrink: 0,
@@ -699,7 +1121,7 @@ export default function TaskDetailPanel({
           </label>
           <button
             type="button"
-            onClick={() => save({ isCriticalPath: !task.isCriticalPath })}
+            onClick={() => persistPartial({ isCriticalPath: !task.isCriticalPath })}
             style={{
               width: 36,
               height: 20,
@@ -742,7 +1164,7 @@ export default function TaskDetailPanel({
             </label>
             <button
               type="button"
-              onClick={() => save({ isSequential: !task.isSequential })}
+              onClick={() => persistPartial({ isSequential: !task.isSequential })}
               style={{
                 width: 36,
                 height: 20,
@@ -803,7 +1225,7 @@ export default function TaskDetailPanel({
           <button
             type="button"
             onClick={() =>
-              save({
+              persistPartial({
                 todayFocusDate: isTodayFocused ? null : activeTodayFocusYmd,
               })
             }
@@ -872,7 +1294,7 @@ export default function TaskDetailPanel({
               <button
                 type="button"
                 onClick={() =>
-                  save({
+                  persistPartial({
                     hideSubtasksOnMainBoard: !task.hideSubtasksOnMainBoard,
                   })
                 }
@@ -926,7 +1348,7 @@ export default function TaskDetailPanel({
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            onBlur={() => save({ notes })}
+            onBlur={() => persistPartial({ notes })}
             rows={6}
             placeholder="Add notes..."
             style={{

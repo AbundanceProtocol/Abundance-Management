@@ -27,16 +27,71 @@ export function compareTaskStartDate(a: TaskItem, b: TaskItem): number {
   return sa.localeCompare(sb);
 }
 
+/** Legacy DB values: `topLevelSort: "category"` was removed; treat as manual ordering. */
+export function coerceTopLevelSort(
+  v: TopLevelSort | string | undefined
+): TopLevelSort {
+  if (v === "category") return "manual";
+  if (v === "priority" || v === "startDate") return v;
+  return "manual";
+}
+
+export function normalizeCategoryKey(task: TaskItem): string {
+  return (task.category ?? "").trim();
+}
+
+function sortCategoryKeys(keys: string[]): string[] {
+  const hasEmpty = keys.includes("");
+  const nonEmpty = keys
+    .filter((k) => k !== "")
+    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  return hasEmpty ? [...nonEmpty, ""] : nonEmpty;
+}
+
+/**
+ * Depth-first list: category groups (alphabetically, uncategorized last), then within each
+ * group roots follow `topLevelSort`, then each root’s subtree as in `buildVisibleTaskTree`.
+ */
+export function buildFlatTasksGroupedByCategory(
+  tasksPool: TaskItem[],
+  collapsedIds: Set<string>,
+  topLevelSort: TopLevelSort
+): TaskItem[] {
+  const sort = coerceTopLevelSort(topLevelSort);
+  const roots = tasksPool.filter((t) => t.parentId === null);
+  const byCat = new Map<string, TaskItem[]>();
+  for (const r of roots) {
+    const k = normalizeCategoryKey(r);
+    if (!byCat.has(k)) byCat.set(k, []);
+    byCat.get(k)!.push(r);
+  }
+  const keys = sortCategoryKeys([...byCat.keys()]);
+  const out: TaskItem[] = [];
+  for (const k of keys) {
+    const groupRoots = [...(byCat.get(k) ?? [])].sort((a, b) =>
+      compareSiblingOrder(a, b, true, sort)
+    );
+    for (const root of groupRoots) {
+      out.push(root);
+      out.push(
+        ...buildVisibleTaskTree(tasksPool, root._id, collapsedIds, sort)
+      );
+    }
+  }
+  return out;
+}
+
 export function compareSiblingOrder(
   a: TaskItem,
   b: TaskItem,
   isTopLevel: boolean,
   topLevelSort: TopLevelSort
 ): number {
-  if (!isTopLevel || topLevelSort === "manual") {
+  const tls = coerceTopLevelSort(topLevelSort);
+  if (!isTopLevel || tls === "manual") {
     return a.order - b.order || a._id.localeCompare(b._id);
   }
-  if (topLevelSort === "priority") {
+  if (tls === "priority") {
     const c = compareTaskPriority(a, b);
     if (c !== 0) return c;
     return a.order - b.order || a._id.localeCompare(b._id);

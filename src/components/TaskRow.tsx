@@ -25,7 +25,23 @@ import {
   Calendar,
   ArrowDownRight,
   ZoomIn,
+  MoreVertical,
+  FileText,
 } from "./Icons";
+
+const COMPACT_TASK_ACTIONS_MQ = "(max-width: 768px)";
+
+function useCompactTaskActions() {
+  const [compact, setCompact] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(COMPACT_TASK_ACTIONS_MQ);
+    const apply = () => setCompact(mq.matches);
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+  return compact;
+}
 
 interface Props {
   task: TaskItem;
@@ -49,6 +65,8 @@ interface Props {
   sortableDisabled?: boolean;
   /** Show a small clock badge when task is selected for today's focus. */
   isTodayFocused?: boolean;
+  /** When set, a category heading is shown above this row (first row of a group). */
+  categoryGroupHeader?: string | null;
 }
 
 export default function TaskRow({
@@ -67,6 +85,7 @@ export default function TaskRow({
   depthIndentOffset = 0,
   sortableDisabled = false,
   isTodayFocused = false,
+  categoryGroupHeader = null,
 }: Props) {
   const [isEditing, setIsEditing] = useState(!task.title);
   const [editValue, setEditValue] = useState(task.title);
@@ -79,6 +98,34 @@ export default function TaskRow({
   const [notesExpanded, setNotesExpanded] = useState(false);
   const [notesOverflow, setNotesOverflow] = useState(false);
   notesExpandedRef.current = notesExpanded;
+
+  const compactActions = useCompactTaskActions();
+  const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
+  const actionsMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setActionsMenuOpen(false);
+  }, [task._id]);
+
+  useEffect(() => {
+    if (!actionsMenuOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const el = actionsMenuRef.current;
+      if (!el || el.contains(e.target as Node)) return;
+      setActionsMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [actionsMenuOpen]);
+
+  useEffect(() => {
+    if (!actionsMenuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setActionsMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [actionsMenuOpen]);
 
   useEffect(() => {
     setNotesExpanded(false);
@@ -110,7 +157,7 @@ export default function TaskRow({
   } = useSortable({
     id: task._id,
     data: { task },
-    disabled: isDragOverlay,
+    disabled: isDragOverlay || sortableDisabled,
   });
 
   const showSequentialArrow =
@@ -147,6 +194,9 @@ export default function TaskRow({
   };
 
   const indent = Math.max(0, task.depth - depthIndentOffset) * 28;
+
+  const showCategoryHeader =
+    Boolean(categoryGroupHeader) && task.parentId === null;
 
   const hasDueDate = Boolean(task.dueDate?.trim());
   const showScheduleOrDueBadge =
@@ -196,6 +246,9 @@ export default function TaskRow({
         ? { background: "var(--bg-tertiary)", color: "var(--text-muted)" }
         : { background: "rgba(251,191,36,0.12)", color: "var(--accent-amber)" };
 
+  const canAddChildAction = task.depth - depthIndentOffset < MAX_TASK_DEPTH;
+  const showZoomInActions = childCount > 0 && !task.hideSubtasksOnMainBoard;
+
   const handleToggleComplete = (e: React.MouseEvent) => {
     e.stopPropagation();
     const freq = task.repeatFrequency ?? "none";
@@ -230,6 +283,23 @@ export default function TaskRow({
       }}
       className={`task-row ${isSelected ? "task-row-selected" : ""} ${isDragOverlay ? "task-row-overlay" : ""}`}
     >
+      {showCategoryHeader && (
+        <div
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+            color: "var(--text-muted)",
+            padding: "2px 8px 6px",
+            marginLeft: -indent,
+            paddingLeft: 8 + indent,
+            borderBottom: "1px solid var(--border-subtle)",
+          }}
+        >
+          {categoryGroupHeader}
+        </div>
+      )}
         <div
         style={{
           display: "flex",
@@ -260,6 +330,7 @@ export default function TaskRow({
             color: "var(--text-muted)",
             padding: 2,
             cursor: "grab",
+            touchAction: "none",
             opacity: 0,
             transition: "opacity 0.15s",
             flexShrink: 0,
@@ -441,6 +512,39 @@ export default function TaskRow({
             )}
 
             {!isEditing &&
+              task.linkedPageId && (
+                <button
+                  type="button"
+                  aria-label="Open linked page"
+                  title="Open linked page"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const pageId = task.linkedPageId;
+                    if (!pageId) return;
+                    window.location.href = `/pages?pageId=${encodeURIComponent(
+                      pageId
+                    )}&taskId=${encodeURIComponent(task._id)}`;
+                  }}
+                  style={{
+                    flexShrink: 0,
+                    width: 26,
+                    height: 26,
+                    padding: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: "rgba(59, 130, 246, 0.18)",
+                    border: "1px solid rgba(96, 165, 250, 0.45)",
+                    color: "var(--accent-blue)",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                  }}
+                >
+                  <FileText size={14} />
+                </button>
+              )}
+
+            {!isEditing &&
               task.hideSubtasksOnMainBoard &&
               childCount > 0 && (
               <Link
@@ -584,92 +688,237 @@ export default function TaskRow({
               )}
             </div>
 
-            {/* Action buttons */}
-            <div
-              style={{
+            {/* Action buttons: overflow menu on narrow viewports; inline on desktop */}
+            {(() => {
+              const showCompactActions = compactActions && !isDragOverlay;
+              const menuItemStyle: React.CSSProperties = {
                 display: "flex",
                 alignItems: "center",
-                gap: 2,
-                opacity: 0,
-                transition: "opacity 0.15s",
-                flexShrink: 0,
-                marginLeft: "auto",
-              }}
-              className="task-actions"
-            >
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelect();
-                }}
-                style={{
-                  background: "none",
-                  border: "none",
-                  color: "var(--text-muted)",
-                  padding: 4,
-                  borderRadius: 3,
-                  display: "flex",
-                  alignItems: "center",
-                }}
-                title="Details"
-              >
-                <Comment size={14} />
-              </button>
-              {childCount > 0 && !task.hideSubtasksOnMainBoard && (
-                <Link
-                  href={`/task/${task._id}`}
-                  onClick={(e) => e.stopPropagation()}
-                  title="Open subtasks on their own page"
+                gap: 8,
+                width: "100%",
+                padding: "8px 10px",
+                border: "none",
+                borderRadius: 4,
+                background: "transparent",
+                color: "var(--text-primary)",
+                fontSize: 13,
+                cursor: "pointer",
+                textAlign: "left",
+                fontFamily: "inherit",
+              };
+
+              if (showCompactActions) {
+                return (
+                  <div
+                    ref={actionsMenuRef}
+                    className="task-actions-mobile-wrap"
+                    style={{
+                      position: "relative",
+                      flexShrink: 0,
+                      marginLeft: "auto",
+                      alignSelf: "center",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="task-actions-menu-trigger"
+                      aria-expanded={actionsMenuOpen}
+                      aria-haspopup="menu"
+                      aria-label="Task actions"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActionsMenuOpen((v) => !v);
+                      }}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "var(--text-muted)",
+                        padding: 6,
+                        borderRadius: 3,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                      title="Task actions"
+                    >
+                      <MoreVertical size={16} />
+                    </button>
+                    {actionsMenuOpen && (
+                      <div
+                        role="menu"
+                        className="task-actions-menu-panel"
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                          position: "absolute",
+                          right: 0,
+                          top: "100%",
+                          marginTop: 4,
+                          zIndex: 60,
+                          minWidth: 188,
+                          padding: 4,
+                          borderRadius: 8,
+                          background: "var(--bg-secondary)",
+                          border: "1px solid var(--border-color)",
+                          boxShadow: "0 8px 28px rgba(0,0,0,0.4)",
+                        }}
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActionsMenuOpen(false);
+                            onSelect();
+                          }}
+                          style={menuItemStyle}
+                        >
+                          <Comment size={14} />
+                          Details
+                        </button>
+                        {showZoomInActions && (
+                          <Link
+                            href={`/task/${task._id}`}
+                            role="menuitem"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActionsMenuOpen(false);
+                            }}
+                            title="Open subtasks on their own page"
+                            style={{
+                              ...menuItemStyle,
+                              textDecoration: "none",
+                              color: "var(--text-primary)",
+                            }}
+                          >
+                            <ZoomIn size={14} />
+                            Subtasks page
+                          </Link>
+                        )}
+                        {canAddChildAction && (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActionsMenuOpen(false);
+                              onAddChild();
+                            }}
+                            style={menuItemStyle}
+                          >
+                            <Plus size={14} />
+                            Add sub-task
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActionsMenuOpen(false);
+                            onDelete(task._id);
+                          }}
+                          style={{
+                            ...menuItemStyle,
+                            color: "var(--accent-red)",
+                          }}
+                        >
+                          <Trash size={14} />
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              return (
+                <div
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    padding: 4,
-                    borderRadius: 3,
-                    color: "var(--text-muted)",
+                    gap: 2,
+                    opacity: 0,
+                    transition: "opacity 0.15s",
+                    flexShrink: 0,
+                    marginLeft: "auto",
                   }}
+                  className="task-actions"
                 >
-                  <ZoomIn size={14} />
-                </Link>
-              )}
-              {task.depth - depthIndentOffset < MAX_TASK_DEPTH && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onAddChild();
-                  }}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "var(--text-muted)",
-                    padding: 4,
-                    borderRadius: 3,
-                    display: "flex",
-                    alignItems: "center",
-                  }}
-                  title="Add sub-task"
-                >
-                  <Plus size={14} />
-                </button>
-              )}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDelete(task._id);
-                  }}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "var(--text-muted)",
-                    padding: 4,
-                    borderRadius: 3,
-                    display: "flex",
-                    alignItems: "center",
-                  }}
-                  title="Delete"
-                >
-                  <Trash size={14} />
-                </button>
-            </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelect();
+                    }}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "var(--text-muted)",
+                      padding: 4,
+                      borderRadius: 3,
+                      display: "flex",
+                      alignItems: "center",
+                    }}
+                    title="Details"
+                  >
+                    <Comment size={14} />
+                  </button>
+                  {showZoomInActions && (
+                    <Link
+                      href={`/task/${task._id}`}
+                      onClick={(e) => e.stopPropagation()}
+                      title="Open subtasks on their own page"
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        padding: 4,
+                        borderRadius: 3,
+                        color: "var(--text-muted)",
+                      }}
+                    >
+                      <ZoomIn size={14} />
+                    </Link>
+                  )}
+                  {canAddChildAction && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAddChild();
+                      }}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "var(--text-muted)",
+                        padding: 4,
+                        borderRadius: 3,
+                        display: "flex",
+                        alignItems: "center",
+                      }}
+                      title="Add sub-task"
+                    >
+                      <Plus size={14} />
+                    </button>
+                  )}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDelete(task._id);
+                    }}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "var(--text-muted)",
+                      padding: 4,
+                      borderRadius: 3,
+                      display: "flex",
+                      alignItems: "center",
+                    }}
+                    title="Delete"
+                  >
+                    <Trash size={14} />
+                  </button>
+                </div>
+              );
+            })()}
           </div>
 
           {(task.urls ?? []).filter((u) => u.trim()).length > 0 && (

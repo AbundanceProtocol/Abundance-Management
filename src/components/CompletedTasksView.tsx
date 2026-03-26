@@ -3,6 +3,7 @@
 import React, { useMemo } from "react";
 import { Section, TaskItem, SectionType } from "@/lib/types";
 import { flattenTasksTree } from "@/lib/timelineUtils";
+import { FileText } from "./Icons";
 
 function sectionGroupLabel(type: SectionType): string {
   switch (type) {
@@ -186,6 +187,38 @@ export default function CompletedTasksView({
                     >
                       {t.title.trim() || "Untitled"}
                     </button>
+                    {t.linkedPageId && (
+                      <button
+                        type="button"
+                        title="Open linked page"
+                        aria-label="Open linked page"
+                        onClick={() => {
+                          const pageId = t.linkedPageId;
+                          if (!pageId) return;
+                          window.location.href = `/pages?pageId=${encodeURIComponent(
+                            pageId
+                          )}&taskId=${encodeURIComponent(t._id)}`;
+                        }}
+                        style={{
+                          flexShrink: 0,
+                          marginLeft: 8,
+                          width: 26,
+                          height: 26,
+                          borderRadius: 6,
+                          padding: 0,
+                          border: "1px solid rgba(96, 165, 250, 0.45)",
+                          background: "rgba(59, 130, 246, 0.18)",
+                          color: "var(--accent-blue)",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          alignSelf: "center",
+                        }}
+                      >
+                        <FileText size={14} />
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -236,6 +269,38 @@ export default function CompletedTasksView({
                       >
                         {h.task.title.trim() || "Untitled"}
                       </button>
+                      {h.task.linkedPageId && (
+                        <button
+                          type="button"
+                          title="Open linked page"
+                          aria-label="Open linked page"
+                          onClick={() => {
+                            const pageId = h.task.linkedPageId;
+                            if (!pageId) return;
+                            window.location.href = `/pages?pageId=${encodeURIComponent(
+                              pageId
+                            )}&taskId=${encodeURIComponent(h.task._id)}`;
+                          }}
+                          style={{
+                            flexShrink: 0,
+                            marginLeft: 8,
+                            width: 26,
+                            height: 26,
+                            borderRadius: 6,
+                            padding: 0,
+                            border: "1px solid rgba(96, 165, 250, 0.45)",
+                            background: "rgba(59, 130, 246, 0.18)",
+                            color: "var(--accent-blue)",
+                            cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            verticalAlign: "middle",
+                          }}
+                        >
+                          <FileText size={14} />
+                        </button>
+                      )}
                       <span style={{ marginLeft: 8, opacity: 0.9 }}>
                         — {h.date}
                       </span>

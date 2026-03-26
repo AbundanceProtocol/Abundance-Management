@@ -27,6 +27,7 @@ export async function GET(request: Request) {
           collapsed: false,
           isSequential: false,
           topLevelSort: "manual",
+          groupByCategory: false,
         },
         {
           title: "Recurring",
@@ -35,6 +36,7 @@ export async function GET(request: Request) {
           collapsed: false,
           isSequential: false,
           topLevelSort: "manual",
+          groupByCategory: false,
         },
         {
           title: "To Do List",
@@ -43,6 +45,7 @@ export async function GET(request: Request) {
           collapsed: false,
           isSequential: false,
           topLevelSort: "manual",
+          groupByCategory: false,
         },
       ];
       const result = await db.collection("sections").insertMany(
@@ -60,7 +63,11 @@ export async function GET(request: Request) {
         ...s,
         _id: s._id.toString(),
         isSequential: s.isSequential ?? false,
-        topLevelSort: s.topLevelSort ?? "manual",
+        topLevelSort:
+          (s as { topLevelSort?: string }).topLevelSort === "category"
+            ? "manual"
+            : (s.topLevelSort ?? "manual"),
+        groupByCategory: s.groupByCategory ?? false,
       }))
     );
   } catch (error) {

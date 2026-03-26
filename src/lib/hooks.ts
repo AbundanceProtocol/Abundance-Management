@@ -88,6 +88,7 @@ export function useTasks() {
         collapsed: false,
         hideSubtasksOnMainBoard: false,
         tags: [],
+        category: "",
         ...(isRecurring
           ? {
               repeatFrequency: "weekly" as const,
@@ -228,6 +229,7 @@ export function useTasks() {
         collapsed: false,
         hideSubtasksOnMainBoard: false,
         tags: [],
+        category: "",
         ...(isRecurring
           ? {
               repeatFrequency: "weekly" as const,

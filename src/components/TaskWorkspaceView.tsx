@@ -14,7 +14,7 @@ import { useTasks, useSections } from "@/lib/hooks";
 import { TaskItem } from "@/lib/types";
 import { filterSubtreeTasks } from "@/lib/taskSubtree";
 import { filterTasksForMainView } from "@/lib/recurrence";
-import { buildVisibleTaskTree } from "@/lib/timelineUtils";
+import { buildVisibleTaskTree, coerceTopLevelSort } from "@/lib/timelineUtils";
 import {
   TaskWorkspaceState,
   WorkspaceCanvasItem,
@@ -47,6 +47,7 @@ import {
   ChevronDown,
   GripVertical,
   FileText,
+  Link as LinkIcon,
   Plus,
 } from "./Icons";
 import DeleteWorkspaceArtifactModal from "./DeleteWorkspaceArtifactModal";
@@ -148,6 +149,8 @@ export default function TaskWorkspaceView({ taskId }: { taskId: string }) {
     loading: tasksLoading,
     updateTask,
     duplicateTaskWithSubtree,
+    createTask,
+    reorderTasks,
   } = useTasks();
 
   const [workspace, setWorkspace] = useState<TaskWorkspaceState>(
@@ -241,7 +244,7 @@ export default function TaskWorkspaceView({ taskId }: { taskId: string }) {
       baseList,
       anchor._id,
       sidebarCollapsedIds,
-      section.topLevelSort ?? "manual"
+      coerceTopLevelSort(section.topLevelSort ?? "manual")
     );
     return [anchor, ...rest];
   }, [anchor, section, baseList, sidebarCollapsedIds]);
@@ -1154,6 +1157,10 @@ export default function TaskWorkspaceView({ taskId }: { taskId: string }) {
           onClose={() => setDetailTaskId(null)}
           onDuplicate={handleDuplicateTask}
           duplicateBusy={duplicateBusy}
+          tasks={tasks}
+          reorderTasks={reorderTasks}
+          createTask={createTask}
+          onNavigateToTask={(id) => setDetailTaskId(id)}
         />
       )}
 
@@ -1486,6 +1493,37 @@ function WorkspaceTaskRow({
             {task.title.trim() || "Untitled"}
           </span>
         </button>
+        {task.linkedPageId && (
+          <button
+            type="button"
+            title="Open linked page"
+            aria-label="Open linked page"
+            onClick={(e) => {
+              e.stopPropagation();
+              const pageId = task.linkedPageId;
+              if (!pageId) return;
+              window.location.href = `/pages?pageId=${encodeURIComponent(
+                pageId
+              )}&taskId=${encodeURIComponent(task._id)}`;
+            }}
+            style={{
+              flexShrink: 0,
+              width: 24,
+              height: 24,
+              padding: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              border: "none",
+              borderRadius: 4,
+              background: "transparent",
+              color: "var(--accent-blue)",
+              cursor: "pointer",
+            }}
+          >
+            <LinkIcon size={14} />
+          </button>
+        )}
         {task.notes?.trim() && (
           <button
             type="button"
@@ -1732,6 +1770,7 @@ function WorkspaceFrame({
               borderRadius: 4,
               color: "var(--text-muted)",
               cursor: "grab",
+              touchAction: "none",
             }}
           >
             <GripVertical size={14} />
@@ -2071,6 +2110,7 @@ function WorkspaceFrame({
           width: 18,
           height: 18,
           cursor: "nwse-resize",
+          touchAction: "none",
           background: "linear-gradient(135deg, transparent 50%, var(--text-muted) 50%)",
           opacity: 0.45,
           borderTopLeftRadius: 4,

@@ -39,6 +39,11 @@ import TaskRow from "./TaskRow";
 import NestDropZone from "./NestDropZone";
 import TaskDetailPanel from "./TaskDetailPanel";
 import DeleteTaskConfirmModal from "./DeleteTaskConfirmModal";
+import { useViewportNarrow } from "@/lib/useViewportNarrow";
+import {
+  MobileAppMenuCollapsedBar,
+  MobileAppMenuCollapseButton,
+} from "./MobileAppMenu";
 
 const nestStripCollision: CollisionDetection = (args) => {
   const pointCollisions = pointerWithin(args);
@@ -68,6 +73,12 @@ export default function TaskZoomView({ taskId }: { taskId: string }) {
 
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [duplicateBusy, setDuplicateBusy] = useState(false);
+  const viewportNarrow = useViewportNarrow();
+  const [mobileZoomMenuOpen, setMobileZoomMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (!viewportNarrow) setMobileZoomMenuOpen(false);
+  }, [viewportNarrow]);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const hoverTargetRef = useRef<string | null>(null);
@@ -112,6 +123,12 @@ export default function TaskZoomView({ taskId }: { taskId: string }) {
     );
     return [anchor, ...rest];
   }, [anchor, section, baseList, collapsedIds]);
+
+  const taskById = useMemo(() => {
+    const m = new Map<string, TaskItem>();
+    for (const t of tasks) m.set(t._id, t);
+    return m;
+  }, [tasks]);
 
   const childCountMap = useMemo(() => {
     const map: Record<string, number> = {};
@@ -425,12 +442,71 @@ export default function TaskZoomView({ taskId }: { taskId: string }) {
           transition: "max-width 0.2s",
         }}
       >
+        {viewportNarrow && !mobileZoomMenuOpen && (
+          <MobileAppMenuCollapsedBar
+            title={anchor.title.trim() || "Untitled"}
+            subtitle={`Task zoom · ${section.title}`}
+            menuId="task-zoom-full-menu"
+            onExpand={() => setMobileZoomMenuOpen(true)}
+            links={
+              <>
+                <Link
+                  href="/"
+                  style={{ color: "var(--accent-blue)", fontWeight: 600 }}
+                >
+                  Board
+                </Link>
+                <span style={{ color: "var(--text-muted)", margin: "0 6px" }}>
+                  ·
+                </span>
+                <Link
+                  href={`/task/${taskId}/workspace`}
+                  style={{ color: "var(--accent-blue)", fontWeight: 600 }}
+                >
+                  Workspace
+                </Link>
+                <span style={{ color: "var(--text-muted)", margin: "0 6px" }}>
+                  ·
+                </span>
+                <Link href="/pages" style={{ color: "var(--accent-blue)" }}>
+                  Pages
+                </Link>
+                {anchor.parentId ? (
+                  <>
+                    <span style={{ color: "var(--text-muted)", margin: "0 6px" }}>
+                      ·
+                    </span>
+                    <Link
+                      href={`/task/${anchor.parentId}`}
+                      style={{ color: "var(--accent-blue)" }}
+                    >
+                      Parent
+                    </Link>
+                  </>
+                ) : null}
+              </>
+            }
+          />
+        )}
+
+        {(!viewportNarrow || mobileZoomMenuOpen) && (
         <header
+          id={viewportNarrow ? "task-zoom-full-menu" : undefined}
           style={{
-            padding: "20px 24px 16px",
+            padding: viewportNarrow ? "12px 16px 12px" : "20px 24px 16px",
             borderBottom: "1px solid var(--border-color)",
+            display: "flex",
+            flexDirection: "column",
+            gap: viewportNarrow ? 8 : 0,
           }}
         >
+          <div
+            style={
+              viewportNarrow && mobileZoomMenuOpen
+                ? { width: "100%", minWidth: 0 }
+                : undefined
+            }
+          >
           <div
             style={{
               display: "flex",
@@ -466,16 +542,46 @@ export default function TaskZoomView({ taskId }: { taskId: string }) {
               </>
             )}
           </div>
-          <h1
-            style={{
-              fontSize: 20,
-              fontWeight: 700,
-              margin: 0,
-              color: "var(--text-primary)",
-            }}
-          >
-            {anchor.title.trim() || "Untitled"}
-          </h1>
+          {viewportNarrow && mobileZoomMenuOpen ? (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                justifyContent: "space-between",
+                gap: 10,
+                width: "100%",
+              }}
+            >
+              <h1
+                style={{
+                  fontSize: 20,
+                  fontWeight: 700,
+                  margin: 0,
+                  color: "var(--text-primary)",
+                  flex: 1,
+                  minWidth: 0,
+                }}
+              >
+                {anchor.title.trim() || "Untitled"}
+              </h1>
+              <MobileAppMenuCollapseButton
+                inline
+                menuId="task-zoom-full-menu"
+                onCollapse={() => setMobileZoomMenuOpen(false)}
+              />
+            </div>
+          ) : (
+            <h1
+              style={{
+                fontSize: 20,
+                fontWeight: 700,
+                margin: 0,
+                color: "var(--text-primary)",
+              }}
+            >
+              {anchor.title.trim() || "Untitled"}
+            </h1>
+          )}
           <p
             style={{
               fontSize: 12,
@@ -485,7 +591,9 @@ export default function TaskZoomView({ taskId }: { taskId: string }) {
           >
             Section: {section.title}
           </p>
+          </div>
         </header>
+        )}
 
         <div style={{ padding: "8px 0" }}>
           <DndContext
@@ -499,12 +607,17 @@ export default function TaskZoomView({ taskId }: { taskId: string }) {
               droppable: { strategy: MeasuringStrategy.Always },
             }}
           >
-            <div style={{ paddingLeft: 8 }}>
+            <div className="task-zoom-task-list">
               <SortableContext
                 items={taskIds}
                 strategy={verticalListSortingStrategy}
               >
-                {flatTasks.map((task) => (
+                {flatTasks.map((task) => {
+                  const parent = task.parentId
+                    ? taskById.get(task.parentId)
+                    : null;
+                  const lockedByParent = Boolean(parent?.lockSubtaskDrag);
+                  return (
                   <React.Fragment key={task._id}>
                     <TaskRow
                       task={task}
@@ -532,11 +645,15 @@ export default function TaskZoomView({ taskId }: { taskId: string }) {
                       }
                       sectionType={section.type}
                       depthIndentOffset={depthIndentOffset}
-                      sortableDisabled={task._id === anchor._id}
+                      sortableDisabled={
+                        task._id === anchor._id || lockedByParent
+                      }
+                      taskZoomList
                     />
                     <NestDropZone taskId={task._id} />
                   </React.Fragment>
-                ))}
+                  );
+                })}
               </SortableContext>
             </div>
 
@@ -559,6 +676,7 @@ export default function TaskZoomView({ taskId }: { taskId: string }) {
                       : undefined
                   }
                   sectionType={activeTaskSection?.type}
+                  taskZoomList
                 />
               ) : null}
             </DragOverlay>

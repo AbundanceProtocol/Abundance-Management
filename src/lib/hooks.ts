@@ -93,6 +93,7 @@ export function useTasks() {
           ? {
               repeatFrequency: "weekly" as const,
               repeatWeekdays: [new Date().getDay()],
+              taskWeight: 5,
             }
           : { repeatFrequency: "none" as const }),
       };
@@ -234,6 +235,7 @@ export function useTasks() {
           ? {
               repeatFrequency: "weekly" as const,
               repeatWeekdays: [new Date().getDay()],
+              taskWeight: 5,
             }
           : { repeatFrequency: "none" as const }),
       };

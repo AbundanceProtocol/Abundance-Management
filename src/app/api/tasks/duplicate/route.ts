@@ -101,6 +101,10 @@ export async function POST(request: Request) {
         order: newOrder,
         title,
         notes: t.notes ?? "",
+        // Daily notes page should not be shared across duplicated tasks.
+        recurringNotesPageId: null,
+        // Temporary completion marker should not be copied.
+        recurringCompletionUntilIso: null,
         urls: [...(t.urls ?? [])],
         tags: [...(t.tags ?? [])],
         completionHistory: [...(t.completionHistory ?? [])],

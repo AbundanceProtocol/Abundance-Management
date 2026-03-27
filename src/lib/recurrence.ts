@@ -70,6 +70,17 @@ export function computeNextDueDate(task: TaskItem, from: Date = new Date()): str
   return formatYmd(addDays(parseYmd(formatYmd(from)), 1));
 }
 
+export function isRecurringCompletionActive(
+  task: TaskItem,
+  now: Date = new Date()
+): boolean {
+  const iso = task.recurringCompletionUntilIso;
+  if (!iso?.trim()) return false;
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return false;
+  return now.getTime() < ms;
+}
+
 function daysInMonth(year: number, monthZeroIndexed: number): number {
   return new Date(year, monthZeroIndexed + 1, 0).getDate();
 }
@@ -139,8 +150,60 @@ function startOfLocalDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
 
+/** Clamp to 1–10; default 5 for missing or invalid values. */
+export function normalizeTaskWeight(w: number | null | undefined): number {
+  if (w == null || !Number.isFinite(w)) return 5;
+  return Math.min(10, Math.max(1, Math.round(w)));
+}
+
+/** Sum of weights for applicable habits on `dayYmd`, and sum of those weights for habits completed that day. */
+export function weightedRecurringDayAssignedAndCompleted(
+  sectionTasks: TaskItem[],
+  dayYmd: string
+): { assigned: number; completed: number } {
+  let assigned = 0;
+  let completed = 0;
+  for (const t of sectionTasks) {
+    const freq = t.repeatFrequency ?? "none";
+    if (freq === "none") continue;
+    const sd = t.startDate?.trim();
+    if (!sd) continue;
+    if (sd > dayYmd) continue;
+    const tw = normalizeTaskWeight(t.taskWeight);
+    assigned += tw;
+    if ((t.completionHistory ?? []).includes(dayYmd)) completed += tw;
+  }
+  return { assigned, completed };
+}
+
+/**
+ * Weighted completion for one calendar day: sum(completed weights) / sum(applicable weights).
+ * Only tasks with a start date on or before `dayYmd` are included; tasks without a start date are excluded.
+ * Returns null if no recurring habit applies to that day.
+ */
+export function weightedRecurringDayCompletionPercent(
+  sectionTasks: TaskItem[],
+  dayYmd: string
+): number | null {
+  const { assigned, completed } = weightedRecurringDayAssignedAndCompleted(
+    sectionTasks,
+    dayYmd
+  );
+  if (assigned === 0) return null;
+  return (completed / assigned) * 100;
+}
+
+/** Add `delta` calendar days to a YYYY-MM-DD string (local date). */
+export function addCalendarDaysYmd(dayYmd: string, delta: number): string {
+  const [y, m, d] = dayYmd.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + delta);
+  return formatYmd(dt);
+}
+
 export function dueBucketForTask(task: TaskItem, now: Date = new Date()): DueBucket | null {
   if (!task.dueDate?.trim() || task.completed) return null;
+  if (isRecurringCompletionActive(task, now)) return null;
   const dueAt = parseDueDateTimeLocal(task.dueDate, task.dueTime);
   if (!dueAt) return null;
   if (dueAt.getTime() < now.getTime()) {

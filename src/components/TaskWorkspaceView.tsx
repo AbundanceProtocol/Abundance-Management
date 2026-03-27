@@ -53,6 +53,10 @@ import {
 import DeleteWorkspaceArtifactModal from "./DeleteWorkspaceArtifactModal";
 import TaskNotesModal from "./TaskNotesModal";
 import TaskDetailPanel from "./TaskDetailPanel";
+import {
+  MobileAppMenuCollapsedBar,
+  MobileAppMenuCollapseButton,
+} from "./MobileAppMenu";
 
 function newId(): string {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
@@ -159,6 +163,7 @@ export default function TaskWorkspaceView({ taskId }: { taskId: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [playingUrl, setPlayingUrl] = useState<string | null>(null);
   const [mobileTasksOpen, setMobileTasksOpen] = useState(false);
+  const [mobileWorkspaceMenuOpen, setMobileWorkspaceMenuOpen] = useState(false);
   const [isNarrow, setIsNarrow] = useState(false);
   /** Sidebar-only: which task ids have their nested rows hidden (independent of board collapse). */
   const [sidebarCollapsedIds, setSidebarCollapsedIds] = useState<Set<string>>(
@@ -206,6 +211,10 @@ export default function TaskWorkspaceView({ taskId }: { taskId: string }) {
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, []);
+
+  useEffect(() => {
+    if (!isNarrow) setMobileWorkspaceMenuOpen(false);
+  }, [isNarrow]);
 
   const anchor = useMemo(
     () => tasks.find((t) => t._id === taskId) ?? null,
@@ -812,6 +821,7 @@ export default function TaskWorkspaceView({ taskId }: { taskId: string }) {
             task={task}
             anchorId={anchor._id}
             depthIndentOffset={depthIndentOffset}
+            isRecurringSection={section?.type === "recurring"}
             directChildCount={childCountMap[task._id] ?? 0}
             isCollapsed={sidebarCollapsedIds.has(task._id)}
             assetCount={lc?.assets ?? 0}
@@ -870,11 +880,50 @@ export default function TaskWorkspaceView({ taskId }: { taskId: string }) {
           minWidth: 0,
         }}
       >
+      {isNarrow && !mobileWorkspaceMenuOpen && (
+        <MobileAppMenuCollapsedBar
+          title={`Workspace · ${anchor.title.trim() || "Untitled"}`}
+          subtitle={section.title}
+          menuId="workspace-full-menu"
+          onExpand={() => setMobileWorkspaceMenuOpen(true)}
+          links={
+            <>
+              <Link
+                href="/"
+                style={{ color: "var(--accent-blue)", fontWeight: 600 }}
+              >
+                Board
+              </Link>
+              <span style={{ color: "var(--text-muted)", margin: "0 6px" }}>
+                ·
+              </span>
+              <Link
+                href={`/task/${taskId}`}
+                style={{ color: "var(--accent-blue)", fontWeight: 600 }}
+              >
+                Task
+              </Link>
+              <span style={{ color: "var(--text-muted)", margin: "0 6px" }}>
+                ·
+              </span>
+              <Link href="/pages" style={{ color: "var(--accent-blue)" }}>
+                Pages
+              </Link>
+            </>
+          }
+        />
+      )}
+
+      {(!isNarrow || mobileWorkspaceMenuOpen) && (
       <header
+        id={isNarrow ? "workspace-full-menu" : undefined}
         style={{
-          padding: "16px 20px",
+          padding: isNarrow ? "12px 16px 12px" : "16px 20px",
           borderBottom: "1px solid var(--border-color)",
           flexShrink: 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: isNarrow ? 8 : 0,
         }}
       >
         <div
@@ -916,19 +965,56 @@ export default function TaskWorkspaceView({ taskId }: { taskId: string }) {
             alignItems: "center",
             justifyContent: "space-between",
             gap: 12,
+            width: "100%",
           }}
         >
-          <div>
-            <h1
-              style={{
-                fontSize: 20,
-                fontWeight: 700,
-                margin: 0,
-                color: "var(--text-primary)",
-              }}
-            >
-              Workspace · {anchor.title.trim() || "Untitled"}
-            </h1>
+          <div
+            style={
+              isNarrow && mobileWorkspaceMenuOpen
+                ? { flex: "1 1 100%", minWidth: 0, width: "100%" }
+                : undefined
+            }
+          >
+            {isNarrow && mobileWorkspaceMenuOpen ? (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  width: "100%",
+                }}
+              >
+                <h1
+                  style={{
+                    fontSize: 20,
+                    fontWeight: 700,
+                    margin: 0,
+                    color: "var(--text-primary)",
+                    flex: 1,
+                    minWidth: 0,
+                  }}
+                >
+                  Workspace · {anchor.title.trim() || "Untitled"}
+                </h1>
+                <MobileAppMenuCollapseButton
+                  inline
+                  menuId="workspace-full-menu"
+                  onCollapse={() => setMobileWorkspaceMenuOpen(false)}
+                />
+              </div>
+            ) : (
+              <h1
+                style={{
+                  fontSize: 20,
+                  fontWeight: 700,
+                  margin: 0,
+                  color: "var(--text-primary)",
+                }}
+              >
+                Workspace · {anchor.title.trim() || "Untitled"}
+              </h1>
+            )}
             <p
               style={{
                 fontSize: 12,
@@ -1039,6 +1125,7 @@ export default function TaskWorkspaceView({ taskId }: { taskId: string }) {
           </div>
         </div>
       </header>
+      )}
 
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
         {showSidebar && (
@@ -1354,6 +1441,7 @@ function WorkspaceTaskRow({
   onToggleComplete,
   onOpenDetails,
   onOpenNote,
+  isRecurringSection,
   selectedForDetail,
 }: {
   task: TaskItem;
@@ -1367,6 +1455,7 @@ function WorkspaceTaskRow({
   onToggleComplete: (task: TaskItem) => void;
   onOpenDetails: (task: TaskItem) => void;
   onOpenNote: (task: TaskItem) => void;
+  isRecurringSection: boolean;
   selectedForDetail: boolean;
 }) {
   const depth = Math.max(0, task.depth - depthIndentOffset);
@@ -1501,6 +1590,38 @@ function WorkspaceTaskRow({
             onClick={(e) => {
               e.stopPropagation();
               const pageId = task.linkedPageId;
+              if (!pageId) return;
+              window.location.href = `/pages?pageId=${encodeURIComponent(
+                pageId
+              )}&taskId=${encodeURIComponent(task._id)}`;
+            }}
+            style={{
+              flexShrink: 0,
+              width: 24,
+              height: 24,
+              padding: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              border: "none",
+              borderRadius: 4,
+              background: "transparent",
+              color: "var(--accent-blue)",
+              cursor: "pointer",
+            }}
+          >
+            <LinkIcon size={14} />
+          </button>
+        )}
+
+        {isRecurringSection && task.recurringNotesPageId && (
+          <button
+            type="button"
+            title="Open daily notes page"
+            aria-label="Open daily notes page"
+            onClick={(e) => {
+              e.stopPropagation();
+              const pageId = task.recurringNotesPageId;
               if (!pageId) return;
               window.location.href = `/pages?pageId=${encodeURIComponent(
                 pageId

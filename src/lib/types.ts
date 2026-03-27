@@ -39,6 +39,11 @@ export interface TaskItem {
    * open this task’s page to work on subtasks.
    */
   hideSubtasksOnMainBoard?: boolean;
+  /**
+   * When true, direct children cannot be drag-reordered under this parent (board + task page lists).
+   * Hierarchy can still be changed from each task’s details (parent picker / attach).
+   */
+  lockSubtaskDrag?: boolean;
   tags: string[];
   /** Free-form label for grouping; empty = uncategorized. Used when section sorts by category. */
   category?: string;
@@ -48,6 +53,23 @@ export interface TaskItem {
   repeatWeekdays?: number[];
   /** YYYY-MM-DD entries when a recurring instance was completed. */
   completionHistory?: string[];
+  /**
+   * For recurring habits (`repeatFrequency` not `none`): relative importance 1–10 for weighted
+   * completion stats. Defaults to 5 when missing.
+   */
+  taskWeight?: number;
+  /**
+   * When set for tasks inside a `recurring` section, the page storing
+   * "notes by date" for this task.
+   */
+  recurringNotesPageId?: string | null;
+  /**
+   * For tasks inside a `recurring` section: temporary completion marker that
+   * stays "checked" until (and only until) the stored time passes.
+   *
+   * Used to keep the UI showing "complete until 2am local time" behavior.
+   */
+  recurringCompletionUntilIso?: string | null;
   /** Visual canvas for this task (media + markdown); only meaningful on the anchor task for a workspace page. */
   workspace?: TaskWorkspaceState;
   /** Optional linked standalone page id. */

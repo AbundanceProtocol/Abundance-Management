@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   TaskItem,
   TimeUnit,
@@ -26,9 +26,17 @@ import {
   Link,
   FileText,
   ArrowDownRight,
+  Lock,
   ZoomIn,
 } from "./Icons";
 import { getActiveTodayFocusYmd, msUntilNextTodayFocusReset } from "@/lib/todayFocus";
+import {
+  buildRecurringNotesPageBody,
+  parseRecurringNotesEntriesFromPageBody,
+  type RecurringNotesEntries,
+} from "@/lib/recurringNotesPage";
+import { normalizeTaskWeight } from "@/lib/recurrence";
+import RecurringTaskNotesModal from "./RecurringTaskNotesModal";
 
 interface Props {
   task: TaskItem;
@@ -99,8 +107,38 @@ export default function TaskDetailPanel({
   );
   const [linkedPageId, setLinkedPageId] = useState(task.linkedPageId ?? "");
   const [pages, setPages] = useState<MarkdownPageItem[]>([]);
+  const pagesRef = useRef<MarkdownPageItem[]>([]);
+  const [recurringNotesPageId, setRecurringNotesPageId] = useState<string | null>(
+    task.recurringNotesPageId ?? null
+  );
+  const [recurringNotesModalOpen, setRecurringNotesModalOpen] = useState(false);
+  const [recurringNotesEntries, setRecurringNotesEntries] = useState<RecurringNotesEntries>(
+    {}
+  );
+  const recurringNotesEntriesRef = useRef<RecurringNotesEntries>({});
+  const [recurringNotesModalDate, setRecurringNotesModalDate] = useState(
+    getActiveTodayFocusYmd()
+  );
+  const [recurringNotesModalText, setRecurringNotesModalText] = useState("");
+  const recurringNotesModalDateRef = useRef(recurringNotesModalDate);
+  const recurringNotesModalTextRef = useRef(recurringNotesModalText);
+  const [recurringNotesSaving, setRecurringNotesSaving] = useState(false);
+  const saveRecurringNotesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const persistRecurringNotesInFlightRef = useRef(false);
+  const persistRecurringNotesNeedsAnotherRef = useRef(false);
+  const persistRecurringNotesPromiseRef = useRef<Promise<void> | null>(null);
+  const ensureRecurringNotesPageInFlightRef = useRef(false);
+  const recurringNotesDirtyRef = useRef(false);
+  const ensureRecurringNotesPagePromiseRef = useRef<
+    Promise<MarkdownPageItem | null> | null
+  >(null);
   const [repeatWeekdays, setRepeatWeekdays] = useState<number[]>(
     () => task.repeatWeekdays?.length ? [...task.repeatWeekdays] : [new Date().getDay()]
+  );
+  const [taskWeight, setTaskWeight] = useState(() =>
+    normalizeTaskWeight(task.taskWeight)
   );
   const [category, setCategory] = useState(() => (task.category ?? "").trim());
   const [reparentBusy, setReparentBusy] = useState(false);
@@ -227,6 +265,7 @@ export default function TaskDetailPanel({
     setRepeatWeekdays(
       task.repeatWeekdays?.length ? [...task.repeatWeekdays] : [new Date().getDay()]
     );
+    setTaskWeight(normalizeTaskWeight(task.taskWeight));
     setCategory((task.category ?? "").trim());
   }, [task]);
 
@@ -267,6 +306,22 @@ export default function TaskDetailPanel({
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    pagesRef.current = pages;
+  }, [pages]);
+
+  useEffect(() => {
+    recurringNotesEntriesRef.current = recurringNotesEntries;
+  }, [recurringNotesEntries]);
+
+  useEffect(() => {
+    recurringNotesModalDateRef.current = recurringNotesModalDate;
+  }, [recurringNotesModalDate]);
+
+  useEffect(() => {
+    recurringNotesModalTextRef.current = recurringNotesModalText;
+  }, [recurringNotesModalText]);
 
   const syncPageRootTask = async (pageId: string, taskId: string) => {
     try {
@@ -327,6 +382,240 @@ export default function TaskDetailPanel({
     }
   }, [creatingLinkedPage, persistPartial, task._id]);
 
+  const ensureRecurringNotesPage = useCallback(async (): Promise<MarkdownPageItem | null> => {
+    if (!section || section.type !== "recurring") return null;
+
+    const candidateId = recurringNotesPageId ?? task.recurringNotesPageId ?? null;
+    if (candidateId) {
+      const hit = pagesRef.current.find((p) => p.id === candidateId) ?? null;
+      if (hit) return hit;
+    }
+
+    if (ensureRecurringNotesPagePromiseRef.current) {
+      return ensureRecurringNotesPagePromiseRef.current;
+    }
+
+    const job = (async () => {
+      ensureRecurringNotesPageInFlightRef.current = true;
+      try {
+        const res = await fetch("/api/pages");
+        const data = (await res.json()) as PagesEnvironment;
+        const items = data?.items ?? [];
+
+        const recheckId = recurringNotesPageId ?? task.recurringNotesPageId ?? null;
+        if (recheckId) {
+          const hit = items.find((p) => p.id === recheckId) ?? null;
+          if (hit) {
+            setRecurringNotesPageId(hit.id);
+            return hit;
+          }
+        }
+
+        const siblings = items.filter((p) => (p.parentId ?? null) === null);
+        const newPageId =
+          typeof crypto !== "undefined" && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `p-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+        const page: MarkdownPageItem = {
+          id: newPageId,
+          title: "Daily notes",
+          body: buildRecurringNotesPageBody({}),
+          linkedTaskId: task._id,
+          parentId: null,
+          depth: 0,
+          order: siblings.length,
+        };
+
+        const nextEnv: PagesEnvironment = { items: [...items, page] };
+        await fetch("/api/pages", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(nextEnv),
+        });
+
+        setPages(nextEnv.items);
+        setRecurringNotesPageId(newPageId);
+        persistPartial({ recurringNotesPageId: newPageId });
+        return page;
+      } catch (e) {
+        console.error(e);
+        alert(e instanceof Error ? e.message : "Failed to create notes page");
+        return null;
+      } finally {
+        ensureRecurringNotesPageInFlightRef.current = false;
+        ensureRecurringNotesPagePromiseRef.current = null;
+      }
+    })();
+
+    ensureRecurringNotesPagePromiseRef.current = job;
+    return job;
+  }, [
+    section,
+    recurringNotesPageId,
+    task.recurringNotesPageId,
+    task._id,
+    pagesRef,
+    persistPartial,
+    buildRecurringNotesPageBody,
+  ]);
+
+  const openRecurringNotesModal = useCallback(async () => {
+    const page = await ensureRecurringNotesPage();
+    if (!page) return;
+
+    const entries = parseRecurringNotesEntriesFromPageBody(page.body);
+    const ymd = activeTodayFocusYmd;
+
+    setRecurringNotesEntries(entries);
+    recurringNotesEntriesRef.current = entries;
+    setRecurringNotesPageId(page.id);
+    setRecurringNotesModalDate(ymd);
+    setRecurringNotesModalText(entries[ymd] ?? "");
+    recurringNotesDirtyRef.current = false;
+    setRecurringNotesModalOpen(true);
+  }, [ensureRecurringNotesPage, activeTodayFocusYmd]);
+
+  const persistRecurringNotesNow = useCallback(async (): Promise<void> => {
+    if (!section || section.type !== "recurring") return;
+    if (!recurringNotesDirtyRef.current) return;
+
+    const pageId = recurringNotesPageId ?? task.recurringNotesPageId ?? null;
+    if (!pageId) return;
+
+    if (persistRecurringNotesPromiseRef.current) {
+      persistRecurringNotesNeedsAnotherRef.current = true;
+      return persistRecurringNotesPromiseRef.current;
+    }
+
+    const job = (async () => {
+      persistRecurringNotesInFlightRef.current = true;
+      setRecurringNotesSaving(true);
+      try {
+        while (true) {
+          persistRecurringNotesNeedsAnotherRef.current = false;
+
+          const dateAtWrite = recurringNotesModalDateRef.current;
+          const textAtWrite = recurringNotesModalTextRef.current;
+          const nextEntries: RecurringNotesEntries = {
+            ...recurringNotesEntriesRef.current,
+          };
+
+          const trimmed = textAtWrite.trim();
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(dateAtWrite)) {
+            // Unexpected; don't write anything.
+            return;
+          }
+
+          if (trimmed.length === 0) {
+            delete nextEntries[dateAtWrite];
+          } else {
+            nextEntries[dateAtWrite] = textAtWrite;
+          }
+
+          const nextBody = buildRecurringNotesPageBody(nextEntries);
+          const nextItems = pagesRef.current.map((p) =>
+            p.id === pageId ? { ...p, body: nextBody } : p
+          );
+
+          // Optimistic local update
+          setPages(nextItems);
+          setRecurringNotesEntries(nextEntries);
+          recurringNotesEntriesRef.current = nextEntries;
+
+          await fetch("/api/pages", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: nextItems }),
+          });
+
+          if (
+            recurringNotesModalDateRef.current === dateAtWrite &&
+            recurringNotesModalTextRef.current === textAtWrite
+          ) {
+            recurringNotesDirtyRef.current = false;
+          }
+
+          if (!persistRecurringNotesNeedsAnotherRef.current) break;
+        }
+      } catch (e) {
+        console.error(e);
+        alert(
+          e instanceof Error
+            ? e.message
+            : "Failed to save recurring notes. Please try again."
+        );
+      } finally {
+        setRecurringNotesSaving(false);
+        persistRecurringNotesInFlightRef.current = false;
+        persistRecurringNotesPromiseRef.current = null;
+      }
+    })();
+
+    persistRecurringNotesPromiseRef.current = job;
+    return job;
+  }, [
+    section,
+    recurringNotesPageId,
+    task.recurringNotesPageId,
+    persistRecurringNotesPromiseRef,
+    pagesRef,
+    buildRecurringNotesPageBody,
+  ]);
+
+  const handleRecurringNotesDateChange = useCallback((next: string) => {
+    const safe = next.trim();
+    setRecurringNotesModalDate(safe);
+    recurringNotesDirtyRef.current = false;
+    const entries = recurringNotesEntriesRef.current;
+    setRecurringNotesModalText(entries[safe] ?? "");
+  }, []);
+
+  const handleRecurringNotesTextChange = useCallback((next: string) => {
+    recurringNotesDirtyRef.current = true;
+    setRecurringNotesModalText(next);
+  }, []);
+
+  useEffect(() => {
+    if (!recurringNotesModalOpen) return;
+    if (!recurringNotesPageId && !task.recurringNotesPageId) return;
+    if (!recurringNotesDirtyRef.current) return;
+    if (saveRecurringNotesTimerRef.current) {
+      clearTimeout(saveRecurringNotesTimerRef.current);
+    }
+    saveRecurringNotesTimerRef.current = setTimeout(() => {
+      void persistRecurringNotesNow();
+    }, 550);
+    return () => {
+      if (saveRecurringNotesTimerRef.current) {
+        clearTimeout(saveRecurringNotesTimerRef.current);
+      }
+    };
+  }, [
+    recurringNotesModalOpen,
+    recurringNotesModalDate,
+    recurringNotesModalText,
+    recurringNotesPageId,
+    task.recurringNotesPageId,
+    persistRecurringNotesNow,
+  ]);
+
+  const closeRecurringNotesModal = useCallback(async () => {
+    try {
+      if (!recurringNotesDirtyRef.current) {
+        setRecurringNotesModalOpen(false);
+        return;
+      }
+      if (saveRecurringNotesTimerRef.current) {
+        clearTimeout(saveRecurringNotesTimerRef.current);
+        saveRecurringNotesTimerRef.current = null;
+      }
+      await persistRecurringNotesNow();
+    } finally {
+      setRecurringNotesModalOpen(false);
+    }
+  }, [persistRecurringNotesNow]);
+
   const commitUrls = () => {
     const cleaned = urls.map((u) => u.trim()).filter(Boolean);
     const prev = (task.urls ?? []).map((u) => u.trim()).filter(Boolean);
@@ -344,13 +633,16 @@ export default function TaskDetailPanel({
         top: 0,
         right: 0,
         width: 380,
+        maxWidth: "100%",
         height: "100vh",
+        maxHeight: "100dvh",
         background: "var(--bg-secondary)",
         borderLeft: "1px solid var(--border-color)",
         display: "flex",
         flexDirection: "column",
         zIndex: 100,
         boxShadow: "-4px 0 20px rgba(0,0,0,0.3)",
+        boxSizing: "border-box",
       }}
     >
       <div
@@ -395,8 +687,12 @@ export default function TaskDetailPanel({
       <div
         style={{
           flex: 1,
+          minHeight: 0,
           overflowY: "auto",
+          WebkitOverflowScrolling: "touch",
           padding: 20,
+          paddingBottom:
+            "calc(20px + max(12px, env(safe-area-inset-bottom, 0px)))",
           display: "flex",
           flexDirection: "column",
           gap: 16,
@@ -968,6 +1264,46 @@ export default function TaskDetailPanel({
           </div>
         )}
 
+        {section?.type === "recurring" && repeatFrequency !== "none" && (
+          <div>
+            <label
+              style={{
+                display: "block",
+                fontSize: 12,
+                color: "var(--text-secondary)",
+                marginBottom: 6,
+              }}
+            >
+              Task weight
+            </label>
+            <select
+              value={taskWeight}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setTaskWeight(v);
+                persistPartial({ taskWeight: v });
+              }}
+              style={{ width: "100%", padding: "8px 10px", borderRadius: 6 }}
+            >
+              {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+            <p
+              style={{
+                fontSize: 11,
+                color: "var(--text-muted)",
+                margin: "6px 0 0",
+                lineHeight: 1.4,
+              }}
+            >
+              Used for weighted completion on the section calendar (1 = light, 10 = heavy).
+            </p>
+          </div>
+        )}
+
         {/* Linked page */}
         <div>
           <label
@@ -1260,6 +1596,91 @@ export default function TaskDetailPanel({
           </button>
         </div>
 
+        {/* Lock subtask dragging (direct children) */}
+        {directChildCount > 0 && (
+          <div style={{ padding: "8px 0" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 13,
+                  color: "var(--text-secondary)",
+                }}
+              >
+                <span
+                  style={{
+                    display: "flex",
+                    color: task.lockSubtaskDrag
+                      ? "var(--accent-blue)"
+                      : "var(--text-secondary)",
+                  }}
+                >
+                  <Lock size={14} />
+                </span>
+                Lock subtask dragging
+              </label>
+              <button
+                type="button"
+                onClick={() =>
+                  persistPartial({ lockSubtaskDrag: !task.lockSubtaskDrag })
+                }
+                style={{
+                  width: 36,
+                  height: 20,
+                  borderRadius: 10,
+                  background: task.lockSubtaskDrag
+                    ? "var(--accent-blue)"
+                    : "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  position: "relative",
+                  transition: "background 0.2s",
+                  padding: 0,
+                  cursor: "pointer",
+                }}
+                aria-pressed={Boolean(task.lockSubtaskDrag)}
+                title={
+                  task.lockSubtaskDrag
+                    ? "Allow dragging to reorder subtasks"
+                    : "Prevent drag-reorder of subtasks"
+                }
+              >
+                <span
+                  style={{
+                    position: "absolute",
+                    top: 2,
+                    left: task.lockSubtaskDrag ? 18 : 2,
+                    width: 14,
+                    height: 14,
+                    borderRadius: "50%",
+                    background: "white",
+                    transition: "left 0.2s",
+                  }}
+                />
+              </button>
+            </div>
+            <p
+              style={{
+                fontSize: 11,
+                color: "var(--text-muted)",
+                margin: "8px 0 0",
+                lineHeight: 1.4,
+              }}
+            >
+              When on, direct subtasks cannot be reordered by dragging on the board
+              or task page. You can still change parent or attach tasks from each
+              subtask’s details.
+            </p>
+          </div>
+        )}
+
         {/* Zoom: subtasks on board vs zoom page */}
         {directChildCount > 0 && (
           <div style={{ padding: "8px 0" }}>
@@ -1342,8 +1763,18 @@ export default function TaskDetailPanel({
 
         {/* Notes */}
         <div>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 }}>
-            <FileText size={14} /> Notes
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 12,
+              color: "var(--text-secondary)",
+              marginBottom: 6,
+            }}
+          >
+            <FileText size={14} />
+            {section?.type === "recurring" ? "General notes" : "Notes"}
           </label>
           <textarea
             value={notes}
@@ -1360,6 +1791,78 @@ export default function TaskDetailPanel({
             }}
           />
         </div>
+
+        {section?.type === "recurring" && (
+          <div
+            style={{
+              marginTop: 16,
+              paddingTop: 12,
+              borderTop: "1px solid var(--border-subtle)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+            }}
+          >
+            <div style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 600 }}>
+              Daily notes (saved by date)
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => void openRecurringNotesModal()}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 8,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-tertiary)",
+                  color: "var(--text-primary)",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Add note for today
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void (async () => {
+                    const page = await ensureRecurringNotesPage();
+                    if (!page) return;
+                    window.location.href = `/pages?pageId=${encodeURIComponent(page.id)}&taskId=${encodeURIComponent(task._id)}`;
+                  })();
+                }}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 8,
+                  border: "1px solid var(--border-color)",
+                  background: "transparent",
+                  color: "var(--accent-blue)",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+                title="Open the daily notes page"
+              >
+                Open notes page
+              </button>
+            </div>
+            <p style={{ margin: 0, fontSize: 11, color: "var(--text-muted)", lineHeight: 1.4 }}>
+              Use this modal to store a note for each date. The notes page will update automatically.
+            </p>
+          </div>
+        )}
+
+        <RecurringTaskNotesModal
+          open={recurringNotesModalOpen}
+          taskTitle={task.title}
+          dateYmd={recurringNotesModalDate}
+          noteText={recurringNotesModalText}
+          saving={recurringNotesSaving}
+          onDateChange={handleRecurringNotesDateChange}
+          onTextChange={handleRecurringNotesTextChange}
+          onClose={() => void closeRecurringNotesModal()}
+        />
       </div>
     </div>
   );

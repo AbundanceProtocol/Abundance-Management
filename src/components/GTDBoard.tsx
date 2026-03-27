@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import {
   DndContext,
   closestCenter,
@@ -23,6 +24,7 @@ import TaskDetailPanel from "./TaskDetailPanel";
 import DeleteTaskConfirmModal from "./DeleteTaskConfirmModal";
 import CriticalPathTimeline from "./CriticalPathTimeline";
 import { AppNavTasksPages } from "./AppNavTasksPages";
+import TaskViewNav from "./TaskViewNav";
 import SegmentedBooleanToggle from "./SegmentedBooleanToggle";
 import { SEGMENTED_ACTIVE, SEGMENTED_INACTIVE } from "@/lib/segmentedControlStyles";
 import {
@@ -45,6 +47,20 @@ import {
   getActiveTodayFocusYmd,
   msUntilNextTodayFocusReset,
 } from "@/lib/todayFocus";
+import { useViewportNarrow } from "@/lib/useViewportNarrow";
+import {
+  MobileAppMenuCollapsedBar,
+  MobileAppMenuCollapseButton,
+  MOBILE_MENU_BUTTON,
+} from "./MobileAppMenu";
+import { Settings as SettingsIcon } from "./Icons";
+import SettingsModal from "./SettingsModal";
+import {
+  filterSectionsByTasksView,
+  parseTasksViewParam,
+  tasksViewShortLabel,
+  type TasksViewFilter,
+} from "@/lib/tasksViewFilter";
 
 const SHOW_CRITICAL_PATH_STORAGE_KEY = "abundance-show-critical-path";
 const BOARD_TAB_STORAGE_KEY = "abundance-board-tab";
@@ -53,6 +69,19 @@ const SHOW_TODAY_FOCUS_ONLY_STORAGE_KEY =
   "abundance-show-today-focus-only";
 
 type BoardLayoutMode = "all" | "today" | "week" | "completed";
+
+function boardLayoutModeLabel(mode: BoardLayoutMode): string {
+  switch (mode) {
+    case "all":
+      return "All tasks";
+    case "today":
+      return "Today's focus";
+    case "week":
+      return "Week's focus";
+    case "completed":
+      return "Completed";
+  }
+}
 
 function readShowTodayFocusOnly(): boolean {
   if (typeof window === "undefined") return false;
@@ -131,7 +160,8 @@ const nestStripCollision: CollisionDetection = (args) => {
 export default function GTDBoard() {
   const router = useRouter();
   const pathname = usePathname();
-  const { sections, loading: sectionsLoading, updateSection } = useSections();
+  const searchParams = useSearchParams();
+  const { sections, loading: sectionsLoading, updateSection, refetch: refetchSections } = useSections();
   const {
     tasks,
     loading: tasksLoading,
@@ -141,6 +171,7 @@ export default function GTDBoard() {
     deleteTask,
     reorderTasks,
     duplicateTaskWithSubtree,
+    refetch: refetchTasks,
   } = useTasks();
 
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -155,6 +186,20 @@ export default function GTDBoard() {
   const [activeTodayFocusYmd, setActiveTodayFocusYmd] = useState(
     getActiveTodayFocusYmd()
   );
+
+  const viewportNarrow = useViewportNarrow();
+  /** Mobile: board chrome starts collapsed to leave room for the task list. */
+  const [mobileBoardMenuOpen, setMobileBoardMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const handleImportComplete = useCallback(() => {
+    refetchSections();
+    refetchTasks();
+  }, [refetchSections, refetchTasks]);
+
+  useEffect(() => {
+    if (!viewportNarrow) setMobileBoardMenuOpen(false);
+  }, [viewportNarrow]);
 
   const boardTab = boardLayoutMode === "completed" ? "completed" : "board";
   const showTodayFocusOnly = boardLayoutMode === "today";
@@ -270,9 +315,25 @@ export default function GTDBoard() {
     [sections, activeTask]
   );
 
+  /** First project section in the account (used for week focus & layout mode guards). */
   const projectSection = useMemo(
     () => sections.find((s) => s.type === "project"),
     [sections]
+  );
+
+  const tasksView: TasksViewFilter = useMemo(
+    () => parseTasksViewParam(searchParams.get("view")),
+    [searchParams]
+  );
+
+  const visibleSections = useMemo(
+    () => filterSectionsByTasksView(sections, tasksView),
+    [sections, tasksView]
+  );
+
+  const projectSectionsVisible = useMemo(
+    () => visibleSections.filter((s) => s.type === "project"),
+    [visibleSections]
   );
 
   useEffect(() => {
@@ -534,30 +595,106 @@ export default function GTDBoard() {
           transition: "max-width 0.2s",
         }}
       >
-        {/* Header */}
+        {viewportNarrow && !mobileBoardMenuOpen && (
+          <MobileAppMenuCollapsedBar
+            title="Abundance Strategy"
+            subtitle={`${tasksViewShortLabel(tasksView)} · ${boardLayoutModeLabel(boardLayoutMode)}`}
+            menuId="board-full-menu"
+            onExpand={() => setMobileBoardMenuOpen(true)}
+            onOpenSettings={() => setSettingsOpen(true)}
+            links={
+              <>
+                <Link
+                  href="/"
+                  style={{ color: "var(--accent-blue)", fontWeight: 600 }}
+                >
+                  Tasks
+                </Link>
+                <span style={{ color: "var(--text-muted)", margin: "0 6px" }}>
+                  ·
+                </span>
+                <Link href="/pages" style={{ color: "var(--accent-blue)" }}>
+                  Pages
+                </Link>
+              </>
+            }
+          />
+        )}
+
+        {(!viewportNarrow || mobileBoardMenuOpen) && (
+          <>
         <header
+          id={viewportNarrow ? "board-full-menu" : undefined}
           style={{
-            padding: "20px 24px 16px",
+            padding: viewportNarrow ? "12px 16px 12px" : "20px 24px 16px",
             borderBottom: "1px solid var(--border-color)",
             display: "flex",
-            alignItems: "flex-start",
-            justifyContent: "space-between",
-            gap: 16,
-            flexWrap: "wrap",
+            flexDirection: "column",
+            gap: viewportNarrow ? 8 : 0,
           }}
         >
-          <div>
-            <h1
-              style={{
-                fontSize: 22,
-                fontWeight: 700,
-                margin: 0,
-                color: "var(--text-primary)",
-                letterSpacing: "-0.01em",
-              }}
-            >
-              Abundance Strategy
-            </h1>
+          <div
+            style={{
+              display: "flex",
+              // Column + flex-start would shrink-wrap children horizontally; stretch
+              // lets the title row span full width so the collapse control sits on the right edge.
+              alignItems: viewportNarrow ? "stretch" : "flex-start",
+              justifyContent: "space-between",
+              gap: 16,
+              flexWrap: "wrap",
+              width: "100%",
+              flexDirection: viewportNarrow ? "column" : "row",
+            }}
+          >
+          <div
+            style={
+              viewportNarrow
+                ? { width: "100%", minWidth: 0 }
+                : undefined
+            }
+          >
+            {viewportNarrow && mobileBoardMenuOpen ? (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  width: "100%",
+                }}
+              >
+                <h1
+                  style={{
+                    fontSize: 22,
+                    fontWeight: 700,
+                    margin: 0,
+                    color: "var(--text-primary)",
+                    letterSpacing: "-0.01em",
+                    flex: 1,
+                    minWidth: 0,
+                  }}
+                >
+                  Abundance Strategy
+                </h1>
+                <MobileAppMenuCollapseButton
+                  inline
+                  menuId="board-full-menu"
+                  onCollapse={() => setMobileBoardMenuOpen(false)}
+                />
+              </div>
+            ) : (
+              <h1
+                style={{
+                  fontSize: 22,
+                  fontWeight: 700,
+                  margin: 0,
+                  color: "var(--text-primary)",
+                  letterSpacing: "-0.01em",
+                }}
+              >
+                Abundance Strategy
+              </h1>
+            )}
             <p
               style={{
                 fontSize: 13,
@@ -568,7 +705,10 @@ export default function GTDBoard() {
               GTD + Critical Path Method
             </p>
             <div style={{ marginTop: 10 }}>
-              <AppNavTasksPages active="tasks" />
+              <AppNavTasksPages active="tasks" compact={viewportNarrow} />
+            </div>
+            <div style={{ marginTop: 10, maxWidth: 560 }}>
+              <TaskViewNav active={tasksView} compact={viewportNarrow} />
             </div>
           </div>
           <div
@@ -577,7 +717,7 @@ export default function GTDBoard() {
               alignItems: "center",
               gap: 10,
               flexWrap: "wrap",
-              justifyContent: "flex-end",
+              justifyContent: viewportNarrow ? "flex-start" : "flex-end",
             }}
           >
             <div
@@ -622,8 +762,7 @@ export default function GTDBoard() {
                   }
                   title={"title" in opt ? opt.title : undefined}
                   style={{
-                    fontSize: 13,
-                    padding: "6px 12px",
+                    ...(viewportNarrow ? MOBILE_MENU_BUTTON : { fontSize: 13, padding: "6px 12px" }),
                     border: "none",
                     borderLeft: i > 0 ? "1px solid var(--border-color)" : "none",
                     ...("disabled" in opt && opt.disabled
@@ -651,49 +790,58 @@ export default function GTDBoard() {
                 value={showCompletedOnMain}
                 onChange={setShowCompletedOnMain}
                 title="Completed tasks on the main board"
+                compact={viewportNarrow}
               />
             )}
-            {projectSection && boardTab === "board" && (
+            {projectSectionsVisible.length > 0 && boardTab === "board" && (
               <SegmentedBooleanToggle
                 label="Graph"
                 value={showCriticalPath}
                 onChange={setShowCriticalPath}
                 title="Critical path graph"
+                compact={viewportNarrow}
               />
             )}
             <button
               type="button"
-              onClick={async () => {
-                await fetch("/api/auth/logout", { method: "POST" });
-                router.replace("/login");
-                router.refresh();
-              }}
+              onClick={() => setSettingsOpen(true)}
+              title="Settings"
               style={{
-                fontSize: 13,
-                padding: "6px 12px",
+                ...(viewportNarrow ? MOBILE_MENU_BUTTON : { fontSize: 13, padding: "6px 10px" }),
                 borderRadius: 6,
                 border: "1px solid var(--border-color)",
                 background: "var(--bg-tertiary)",
                 color: "var(--text-secondary)",
                 cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
               }}
             >
-              Sign out
+              <SettingsIcon size={15} />
+              {!viewportNarrow && "Settings"}
             </button>
+          </div>
           </div>
         </header>
 
-        {boardTab === "board" && projectSection && showCriticalPath && (
-          <CriticalPathTimeline
-            section={projectSection}
-            tasks={tasks}
-            onSelectTask={(id) => setSelectedTaskId(id)}
-            isFocusedView={projectFocusedView}
-            onExitFocusedView={() => setBoardLayoutMode("all")}
-          />
-        )}
+        {boardTab === "board" &&
+          projectSectionsVisible.length > 0 &&
+          showCriticalPath &&
+          projectSectionsVisible.map((sec) => (
+            <CriticalPathTimeline
+              key={sec._id}
+              section={sec}
+              tasks={tasks}
+              onSelectTask={(id) => setSelectedTaskId(id)}
+              isFocusedView={projectFocusedView}
+              onExitFocusedView={() => setBoardLayoutMode("all")}
+            />
+          ))}
 
-        {boardTab === "board" && projectSection && !showCriticalPath && (
+        {boardTab === "board" &&
+          projectSectionsVisible.length > 0 &&
+          !showCriticalPath && (
           <div style={{ margin: "0 24px 12px" }}>
             <button
               type="button"
@@ -714,16 +862,41 @@ export default function GTDBoard() {
             </button>
           </div>
         )}
+          </>
+        )}
 
         {/* Content */}
         <div style={{ padding: "8px 0" }}>
           {boardTab === "completed" ? (
             <CompletedTasksView
-              sections={sections}
+              sections={visibleSections}
               tasks={tasks}
               onUpdateTask={updateTask}
               onSelectTask={setSelectedTaskId}
             />
+          ) : visibleSections.length === 0 ? (
+            <div
+              style={{
+                padding: "32px 24px",
+                textAlign: "center",
+                color: "var(--text-muted)",
+                fontSize: 14,
+                lineHeight: 1.5,
+              }}
+            >
+              <p style={{ margin: 0 }}>
+                {tasksView === "all"
+                  ? "No sections yet."
+                  : `No ${tasksViewShortLabel(tasksView).toLowerCase()} sections.`}
+              </p>
+              {tasksView !== "all" && (
+                <p style={{ margin: "12px 0 0", fontSize: 13 }}>
+                  <Link href="/" style={{ color: "var(--accent-blue)", fontWeight: 600 }}>
+                    Show all sections
+                  </Link>
+                </p>
+              )}
+            </div>
           ) : (
             <DndContext
               sensors={sensors}
@@ -736,7 +909,7 @@ export default function GTDBoard() {
                 droppable: { strategy: MeasuringStrategy.Always },
               }}
             >
-              {sections.map((section) => (
+              {visibleSections.map((section) => (
                 <SectionView
                   key={section._id}
                   section={section}
@@ -755,6 +928,7 @@ export default function GTDBoard() {
                   focusedProjectMainIds={projectFocusSets?.mainIds ?? null}
                   focusedProjectUndatedIds={projectFocusSets?.undatedIds ?? null}
                   onExitProjectFocusedView={() => setBoardLayoutMode("all")}
+                  showRecurringSectionInsights={tasksView === "recurring"}
                 />
               ))}
 
@@ -810,6 +984,12 @@ export default function GTDBoard() {
         totalRemoving={pendingDeleteMeta?.totalRemoving ?? 1}
         onConfirm={handleConfirmDelete}
         onCancel={handleCancelDelete}
+      />
+
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onImportComplete={handleImportComplete}
       />
     </div>
   );

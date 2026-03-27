@@ -90,11 +90,24 @@ button {
   opacity: 1 !important;
 }
 
+/* Drag disabled (locked parent, zoom anchor, etc.): keep grip hidden on touch “always visible” layouts */
+.task-row-inner.task-row-drag-disabled .drag-handle {
+  visibility: hidden !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
+}
+
 /* Touch / coarse pointers: no hover, so keep drag handle and row actions visible */
 @media (hover: none) and (pointer: coarse) {
   .task-row-inner .drag-handle,
   .task-row-inner .task-actions {
     opacity: 1 !important;
+  }
+
+  .task-row-inner.task-row-drag-disabled .drag-handle {
+    visibility: hidden !important;
+    pointer-events: none !important;
+    opacity: 0 !important;
   }
 
   .task-row-inner .drag-handle {
@@ -104,6 +117,31 @@ button {
     margin-top: 0;
     align-self: center;
     justify-content: center;
+  }
+}
+
+/* Narrow viewports: match checkbox row height (22px); center grip icon with circle */
+@media (max-width: 768px) {
+  .task-row-inner .drag-handle {
+    min-width: 0 !important;
+    min-height: 0 !important;
+    align-self: flex-start;
+    margin-top: 0.12em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+  }
+}
+
+@media (max-width: 768px) and (hover: none) and (pointer: coarse) {
+  .task-row-inner .drag-handle {
+    min-width: 22px !important;
+    min-height: 22px !important;
+    max-height: 22px;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
   }
 }
 
@@ -215,9 +253,19 @@ button {
 
 /* Task row layout */
 .task-row-inner {
-  padding: 6px 12px 6px 4px;
+  padding: 6px 10px 6px 0;
   gap: 4px;
   min-height: 40px;
+}
+
+.task-zoom-task-list {
+  padding-left: 0;
+}
+
+.task-row-inner.task-row-inner--task-zoom-narrow {
+  gap: 0;
+  padding-left: 0;
+  padding-right: 6px;
 }
 
 .task-row-circle-row {
@@ -228,6 +276,23 @@ button {
   flex-wrap: nowrap;
   align-items: flex-start;
   gap: 10px;
+}
+
+@media (max-width: 768px) {
+  .task-zoom-task-list {
+    padding-left: 0;
+  }
+
+  .task-row-inner {
+    gap: 2px;
+    padding: 6px 8px 6px 0;
+  }
+
+  .task-row-inner.task-row-inner--task-zoom-narrow {
+    gap: 0;
+    padding-left: 0;
+    padding-right: 6px;
+  }
 }
 
 .task-row-text-stack {
@@ -284,8 +349,14 @@ button {
   }
 }
 
+@media (max-width: 768px) {
+  .task-row-circle-row {
+    gap: 6px;
+  }
+}
+
 .task-row-notes-wrap {
-  padding: 0 4px 2px;
+  padding: 0 0 2px;
 }
 
 .task-row-notes-toggle {

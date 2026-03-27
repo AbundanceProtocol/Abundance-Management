@@ -10,7 +10,9 @@ import {
   formatYmd,
   parseDueDateTimeLocal,
   formatDueTimeDisplay,
+  isRecurringCompletionActive,
 } from "@/lib/recurrence";
+import { getActiveTodayFocusYmd, msUntilNextTodayFocusReset } from "@/lib/todayFocus";
 import { MAX_TASK_DEPTH } from "@/lib/constants";
 import { formatTaskUrlLabel, normalizeTaskHref } from "@/lib/taskUrls";
 import {
@@ -67,6 +69,8 @@ interface Props {
   isTodayFocused?: boolean;
   /** When set, a category heading is shown above this row (first row of a group). */
   categoryGroupHeader?: string | null;
+  /** Task zoom page list: tighter hierarchy + spacing on narrow viewports. */
+  taskZoomList?: boolean;
 }
 
 export default function TaskRow({
@@ -86,6 +90,7 @@ export default function TaskRow({
   sortableDisabled = false,
   isTodayFocused = false,
   categoryGroupHeader = null,
+  taskZoomList = false,
 }: Props) {
   const [isEditing, setIsEditing] = useState(!task.title);
   const [editValue, setEditValue] = useState(task.title);
@@ -193,18 +198,41 @@ export default function TaskRow({
     }
   };
 
-  const indent = Math.max(0, task.depth - depthIndentOffset) * 28;
+  const indentStep =
+    taskZoomList && compactActions ? 18 : 28;
+  const rawIndent =
+    Math.max(0, task.depth - depthIndentOffset) * indentStep;
+  /**
+   * Task zoom: subtract one nesting step from row padding so the list isn’t doubly
+   * indented vs the page — keeps subtask rows where they were before the “full indent”
+   * experiment. Main board: no change.
+   */
+  const indent =
+    taskZoomList && rawIndent > 0
+      ? Math.max(0, rawIndent - indentStep)
+      : rawIndent;
+  /** Zoom root task only: shift left by one step so it sits left of its subtasks without moving them. */
+  const isZoomAnchorRow =
+    taskZoomList && task.depth === depthIndentOffset;
 
   const showCategoryHeader =
     Boolean(categoryGroupHeader) && task.parentId === null;
+
+  const recurringTempCompleteActive =
+    sectionType === "recurring" &&
+    isRecurringCompletionActive(task, new Date());
+  const effectiveCompleted = task.completed || recurringTempCompleteActive;
 
   const hasDueDate = Boolean(task.dueDate?.trim());
   const showScheduleOrDueBadge =
     hasDueDate ||
     (sectionType === "recurring" && Boolean(task.dueTime?.trim()));
+  const showScheduleOrDueBadgeVisible = !effectiveCompleted && showScheduleOrDueBadge;
   const dueAt = parseDueDateTimeLocal(task.dueDate, task.dueTime);
   const isOverdue =
-    Boolean(dueAt) && dueAt!.getTime() < Date.now() && !task.completed;
+    Boolean(dueAt) &&
+    dueAt!.getTime() < Date.now() &&
+    !effectiveCompleted;
 
   const formatDueDate = (date: string) => {
     const d = new Date(date);
@@ -249,28 +277,63 @@ export default function TaskRow({
   const canAddChildAction = task.depth - depthIndentOffset < MAX_TASK_DEPTH;
   const showZoomInActions = childCount > 0 && !task.hideSubtasksOnMainBoard;
 
+  /** Task zoom page: anchor row is non-draggable; on narrow viewports hide grip + chevron for more title space. */
+  const hideZoomAnchorMobileChrome = sortableDisabled && compactActions;
+  /** Non-draggable row (e.g. zoom anchor, parent locked subtask drag): hide grip so touch UIs don’t show a dead handle. */
+  const hideDragHandle = sortableDisabled;
+
+  const narrowZoomMobile = taskZoomList && compactActions;
+  /** Match completion circle (22px); center grip/chevron vertically in that strip. */
+  const rowChromeSize = 22;
+  const dragHandlePad = compactActions ? "0 1px 0 0" : 2;
+  const chevronPad = compactActions ? "0 1px" : 2;
+
+  function parseYmdLocal(s: string): Date {
+    const [y, m, d] = s.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }
+
   const handleToggleComplete = (e: React.MouseEvent) => {
     e.stopPropagation();
     const freq = task.repeatFrequency ?? "none";
-    if (
-      sectionType === "recurring" &&
-      freq !== "none"
-    ) {
-      if (task.completed) {
-        onUpdate({ _id: task._id, completed: false });
+    if (sectionType === "recurring" && freq !== "none") {
+      // Toggle "occurrence complete" for this recurring instance.
+      // We keep `task.completed=false` so recurring tasks stay on the main board,
+      // but we use `recurringCompletionUntilIso` to keep the checkbox checked until 2am.
+      if (effectiveCompleted) {
+        onUpdate({
+          _id: task._id,
+          completed: false,
+          recurringCompletionUntilIso: null,
+        });
         return;
       }
-      const today = formatYmd(new Date());
-      const next = computeNextDueDate(task, new Date());
+
+      const completionYmd = getActiveTodayFocusYmd(new Date());
+      const completionDate = parseYmdLocal(completionYmd);
+
+      const ms = msUntilNextTodayFocusReset(new Date());
+      const untilIso = new Date(Date.now() + Math.max(0, ms)).toISOString();
+
+      const next = computeNextDueDate(task, completionDate);
       onUpdate({
         _id: task._id,
         completed: false,
         dueDate: next,
-        completionHistory: [...(task.completionHistory ?? []), today],
+        completionHistory: [
+          ...(task.completionHistory ?? []),
+          completionYmd,
+        ],
+        recurringCompletionUntilIso: untilIso,
       });
       return;
     }
-    onUpdate({ _id: task._id, completed: !task.completed });
+
+    onUpdate({
+      _id: task._id,
+      completed: !task.completed,
+      recurringCompletionUntilIso: null,
+    });
   };
 
   return (
@@ -279,6 +342,7 @@ export default function TaskRow({
       data-task-id={task._id}
       style={{
         ...style,
+        marginLeft: isZoomAnchorRow ? -indentStep : 0,
         paddingLeft: indent,
       }}
       className={`task-row ${isSelected ? "task-row-selected" : ""} ${isDragOverlay ? "task-row-overlay" : ""}`}
@@ -308,7 +372,7 @@ export default function TaskRow({
           background: isSelected ? "var(--bg-active)" : "transparent",
           position: "relative",
         }}
-        className="task-row-inner"
+        className={`task-row-inner${narrowZoomMobile ? " task-row-inner--task-zoom-narrow" : ""}${hideDragHandle ? " task-row-drag-disabled" : ""}`}
         onClick={(e) => {
           const el = e.target as HTMLElement;
           if (el.closest("button")) return;
@@ -318,64 +382,99 @@ export default function TaskRow({
           onSelect();
         }}
       >
-        {/* Drag handle */}
+        {/* Drag handle — kept in DOM but invisible for anchor row so circles align */}
         <button
           type="button"
-          title="Drag to reorder. Use the thin strip *below* a row: quick drop moves the task after it; hover that strip 2s then drop to nest inside it."
-          {...attributes}
-          {...listeners}
+          title={hideDragHandle ? undefined : "Drag to reorder. Use the thin strip *below* a row: quick drop moves the task after it; hover that strip 2s then drop to nest inside it."}
+          {...(hideDragHandle ? {} : { ...attributes, ...listeners })}
+          tabIndex={hideDragHandle ? -1 : undefined}
           style={{
             background: "none",
             border: "none",
             color: "var(--text-muted)",
-            padding: 2,
-            cursor: "grab",
+            padding: dragHandlePad,
+            cursor: hideDragHandle ? "default" : "grab",
             touchAction: "none",
             opacity: 0,
             transition: "opacity 0.15s",
             flexShrink: 0,
             alignSelf: "flex-start",
             marginTop: "0.12em",
+            height: rowChromeSize,
+            minHeight: 0,
+            minWidth: 0,
+            boxSizing: "border-box",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            ...(hideDragHandle
+              ? { visibility: "hidden" as const, pointerEvents: "none" as const }
+              : {}),
           }}
           className="drag-handle"
         >
           <GripVertical size={14} />
         </button>
 
-        {/* Collapse toggle */}
+        {/* Collapse toggle — kept in DOM but invisible for anchor row so circles align */}
         {childCount > 0 ? (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleCollapse();
-              }}
-              style={{
-                background: "none",
-                border: "none",
-                color: "var(--text-muted)",
-                padding: 2,
-                flexShrink: 0,
-                display: "flex",
-                alignItems: "center",
-                alignSelf: "flex-start",
-                marginTop: "0.12em",
-              }}
-            >
-              {task.collapsed ? (
-                <ChevronRight size={14} />
-              ) : (
-                <ChevronDown size={14} />
-              )}
-            </button>
-        ) : (
-          <span
+          <button
+            onClick={(e) => {
+              if (hideZoomAnchorMobileChrome) return;
+              e.stopPropagation();
+              onToggleCollapse();
+            }}
+            tabIndex={hideZoomAnchorMobileChrome ? -1 : undefined}
             style={{
-              width: 18,
+              background: "none",
+              border: "none",
+              color: "var(--text-muted)",
+              padding: chevronPad,
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              alignSelf: "flex-start",
+              marginTop: "0.12em",
+              height: rowChromeSize,
+              minHeight: 0,
+              minWidth: 0,
+              boxSizing: "border-box",
+              ...(hideZoomAnchorMobileChrome
+                ? { visibility: "hidden" as const, pointerEvents: "none" as const }
+                : {}),
+            }}
+          >
+            {task.collapsed ? (
+              <ChevronRight size={14} />
+            ) : (
+              <ChevronDown size={14} />
+            )}
+          </button>
+        ) : (
+          <button
+            tabIndex={-1}
+            style={{
+              background: "none",
+              border: "none",
+              padding: chevronPad,
               flexShrink: 0,
               alignSelf: "flex-start",
               marginTop: "0.12em",
+              height: rowChromeSize,
+              minHeight: 0,
+              minWidth: 0,
+              boxSizing: "border-box",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              visibility: "hidden",
+              pointerEvents: "none",
             }}
-          />
+            aria-hidden
+          >
+            <ChevronDown size={14} />
+          </button>
         )}
 
         {/* Circle + text column: circle vertically aligned with first line of title */}
@@ -391,16 +490,16 @@ export default function TaskRow({
                   marginTop: "0.12em",
                   borderRadius: "50%",
                   border: `2.5px solid ${
-                    task.completed
+                    effectiveCompleted
                       ? "var(--accent-green)"
                       : task.isCriticalPath
                         ? "var(--critical-path)"
                         : "var(--text-secondary)"
                   }`,
-                  background: task.completed
+                  background: effectiveCompleted
                     ? "var(--accent-green)"
                     : "rgba(255, 255, 255, 0.06)",
-                  boxShadow: task.completed
+                  boxShadow: effectiveCompleted
                     ? "none"
                     : "inset 0 0 0 1px rgba(255, 255, 255, 0.06)",
                   flexShrink: 0,
@@ -411,9 +510,9 @@ export default function TaskRow({
                   padding: 0,
                   transition: "border-color 0.15s, background 0.15s, box-shadow 0.15s",
                 }}
-                title={task.completed ? "Mark incomplete" : "Mark complete"}
+                title={effectiveCompleted ? "Mark incomplete" : "Mark complete"}
               >
-                {task.completed && (
+                {effectiveCompleted && (
                   <svg width="11" height="11" viewBox="0 0 10 10" fill="none">
                     <path
                       d="M2 5l2.5 2.5L8 3"
@@ -495,8 +594,8 @@ export default function TaskRow({
                   maxWidth: "100%",
                   cursor: "pointer",
                   padding: "2px 4px",
-                  textDecoration: task.completed ? "line-through" : "none",
-                  color: task.completed ? "var(--text-muted)" : "var(--text-primary)",
+                  textDecoration: effectiveCompleted ? "line-through" : "none",
+                  color: effectiveCompleted ? "var(--text-muted)" : "var(--text-primary)",
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -520,6 +619,40 @@ export default function TaskRow({
                   onClick={(e) => {
                     e.stopPropagation();
                     const pageId = task.linkedPageId;
+                    if (!pageId) return;
+                    window.location.href = `/pages?pageId=${encodeURIComponent(
+                      pageId
+                    )}&taskId=${encodeURIComponent(task._id)}`;
+                  }}
+                  style={{
+                    flexShrink: 0,
+                    width: 26,
+                    height: 26,
+                    padding: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: "rgba(59, 130, 246, 0.18)",
+                    border: "1px solid rgba(96, 165, 250, 0.45)",
+                    color: "var(--accent-blue)",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                  }}
+                >
+                  <FileText size={14} />
+                </button>
+              )}
+
+            {!isEditing &&
+              sectionType === "recurring" &&
+              task.recurringNotesPageId && (
+                <button
+                  type="button"
+                  aria-label="Open daily notes page"
+                  title="Open daily notes page"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const pageId = task.recurringNotesPageId;
                     if (!pageId) return;
                     window.location.href = `/pages?pageId=${encodeURIComponent(
                       pageId
@@ -668,7 +801,7 @@ export default function TaskRow({
                 </span>
               ))}
 
-              {showScheduleOrDueBadge && (
+              {showScheduleOrDueBadgeVisible && (
                 <span
                   style={{
                     fontSize: 11,

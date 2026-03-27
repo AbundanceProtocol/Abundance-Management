@@ -21,6 +21,7 @@ import { ChevronRight, ChevronDown, Plus, Comment, ArrowDownRight } from "./Icon
 import { isHiddenFromMainBoardByAncestor } from "@/lib/taskSubtree";
 import TaskRow from "./TaskRow";
 import NestDropZone from "./NestDropZone";
+import RecurringSectionInsights from "./RecurringSectionInsights";
 
 function dueDateTimeLabel(t: TaskItem): string {
   const tm = formatDueTimeDisplay(t.dueTime);
@@ -83,6 +84,8 @@ interface Props {
    * @default true
    */
   showOnlyRootTasksOnMain?: boolean;
+  /** Chart/calendar stats for recurring sections; only on the recurring (`?view=recurring`) board, not "all". */
+  showRecurringSectionInsights?: boolean;
 }
 
 export default function SectionView({
@@ -103,11 +106,18 @@ export default function SectionView({
   focusedProjectUndatedIds = null,
   onExitProjectFocusedView,
   showOnlyRootTasksOnMain = true,
+  showRecurringSectionInsights = false,
 }: Props) {
   const sectionTasksRaw = useMemo(
     () => tasks.filter((t) => t.sectionId === section._id),
     [tasks, section._id]
   );
+
+  const sectionTaskById = useMemo(() => {
+    const m = new Map<string, TaskItem>();
+    for (const t of sectionTasksRaw) m.set(t._id, t);
+    return m;
+  }, [sectionTasksRaw]);
 
   const baseAfterCompleted = useMemo(
     () => filterTasksForMainView(sectionTasksRaw, showCompletedOnMain),
@@ -720,9 +730,15 @@ export default function SectionView({
         )
       )}
 
+      {!section.collapsed &&
+        section.type === "recurring" &&
+        showRecurringSectionInsights && (
+          <RecurringSectionInsights sectionId={section._id} sectionTasks={sectionTasksRaw} />
+        )}
+
       {/* Task List */}
       {!section.collapsed && (
-        <div style={{ paddingLeft: 8 }}>
+        <div style={{ paddingLeft: 2 }}>
           <SortableContext
             items={taskIds}
             strategy={verticalListSortingStrategy}
@@ -754,6 +770,10 @@ export default function SectionView({
                   categoryGroupHeader={
                     categoryHeadersByTaskId.get(task._id) ?? null
                   }
+                  sortableDisabled={Boolean(
+                    task.parentId &&
+                      sectionTaskById.get(task.parentId)?.lockSubtaskDrag
+                  )}
                 />
                 <NestDropZone taskId={task._id} />
               </React.Fragment>
@@ -826,6 +846,10 @@ export default function SectionView({
                       categoryGroupHeader={
                         categoryHeadersUndatedByTaskId.get(task._id) ?? null
                       }
+                      sortableDisabled={Boolean(
+                        task.parentId &&
+                          sectionTaskById.get(task.parentId)?.lockSubtaskDrag
+                      )}
                     />
                     <NestDropZone taskId={task._id} />
                   </React.Fragment>

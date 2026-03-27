@@ -3,6 +3,7 @@
 import React, { useMemo } from "react";
 import { Section, TaskItem, SectionType } from "@/lib/types";
 import { flattenTasksTree } from "@/lib/timelineUtils";
+import { isRecurringCompletionActive } from "@/lib/recurrence";
 import { FileText } from "./Icons";
 
 function sectionGroupLabel(type: SectionType): string {
@@ -31,6 +32,8 @@ export default function CompletedTasksView({
   onUpdateTask,
   onSelectTask,
 }: Props) {
+  const now = new Date();
+
   const orderedSections = useMemo(
     () => [...sections].sort((a, b) => a.order - b.order),
     [sections]
@@ -50,7 +53,7 @@ export default function CompletedTasksView({
     for (const t of tasks) {
       const entry = map.get(t.sectionId);
       if (!entry) continue;
-      if (t.completed) entry.completed.push(t);
+      if (t.completed || isRecurringCompletionActive(t, now)) entry.completed.push(t);
       for (const d of t.completionHistory ?? []) {
         if (d?.trim()) entry.history.push({ task: t, date: d.trim() });
       }
@@ -59,7 +62,7 @@ export default function CompletedTasksView({
       v.history.sort((a, b) => b.date.localeCompare(a.date));
     }
     return map;
-  }, [tasks, sections]);
+  }, [tasks, sections, now.getTime()]);
 
   return (
     <div style={{ padding: "8px 0 24px" }}>
@@ -70,7 +73,9 @@ export default function CompletedTasksView({
           tasks.filter((t) => t.sectionId === section._id),
           "manual"
         );
-        const completedInOrder = flat.filter((t) => t.completed);
+        const completedInOrder = flat.filter(
+          (t) => t.completed || isRecurringCompletionActive(t, now)
+        );
         const hasHistory = data.history.length > 0;
         if (completedInOrder.length === 0 && !hasHistory) {
           return (
@@ -141,7 +146,11 @@ export default function CompletedTasksView({
                       type="button"
                       title="Mark incomplete"
                       onClick={() =>
-                        onUpdateTask({ _id: t._id, completed: false })
+                        onUpdateTask({
+                          _id: t._id,
+                          completed: false,
+                          recurringCompletionUntilIso: null,
+                        })
                       }
                       style={{
                         width: 20,

@@ -140,6 +140,21 @@ export function ArrowDownRight({ size = 16, className = "" }: IconProps) {
   );
 }
 
+/** Padlock — lock subtask drag / restrictions */
+export function Lock({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <rect x="4" y="7" width="8" height="7" rx="1" stroke="currentColor" strokeWidth="1.2" />
+      <path
+        d="M5 7V5.5a3 3 0 0 1 6 0V7"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 /** 2×2 grid — pane / layout control */
 export function LayoutGrid({ size = 16, className = "" }: IconProps) {
   return (
@@ -286,6 +301,44 @@ export function Redo({ size = 16, className = "" }: IconProps) {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+export function Settings({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path
+        d="M6.86 2h2.28l.32 1.6a4.5 4.5 0 011.16.67l1.54-.52 1.14 1.98-1.22 1.08a4.6 4.6 0 010 1.38l1.22 1.08-1.14 1.98-1.54-.52a4.5 4.5 0 01-1.16.67L9.14 14H6.86l-.32-1.6a4.5 4.5 0 01-1.16-.67l-1.54.52-1.14-1.98 1.22-1.08a4.6 4.6 0 010-1.38L2.7 6.73l1.14-1.98 1.54.52a4.5 4.5 0 011.16-.67L6.86 2z"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <circle cx="8" cy="8" r="2" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
+export function Download({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path d="M8 2v8m0 0L5 7m3 3l3-3M3 12h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function Upload({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path d="M8 10V2m0 0L5 5m3-3l3 3M3 12h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function LogOut({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path d="M6 14H3a1 1 0 01-1-1V3a1 1 0 011-1h3M11 11l3-3-3-3M6 8h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

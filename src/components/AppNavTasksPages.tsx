@@ -20,11 +20,23 @@ const SEGMENT_BASE: CSSProperties = {
   minWidth: 108,
 };
 
+const SEGMENT_BASE_COMPACT: CSSProperties = {
+  ...SEGMENT_BASE,
+  fontSize: 10,
+  padding: "4px 8px",
+  minHeight: 26,
+  minWidth: 64,
+};
+
 export function AppNavTasksPages({
   active,
+  compact = false,
 }: {
   active: "tasks" | "pages";
+  /** Narrow mobile header: smaller Tasks / Pages control. */
+  compact?: boolean;
 }) {
+  const seg = compact ? SEGMENT_BASE_COMPACT : SEGMENT_BASE;
   return (
     <div
       role="navigation"
@@ -42,7 +54,7 @@ export function AppNavTasksPages({
         <span
           aria-current="page"
           style={{
-            ...SEGMENT_BASE,
+            ...seg,
             ...SEGMENTED_ACTIVE,
             cursor: "default",
           }}
@@ -53,7 +65,7 @@ export function AppNavTasksPages({
         <Link
           href="/"
           style={{
-            ...SEGMENT_BASE,
+            ...seg,
             background: "transparent",
             color: "var(--text-muted)",
             cursor: "pointer",
@@ -66,7 +78,7 @@ export function AppNavTasksPages({
         <span
           aria-current="page"
           style={{
-            ...SEGMENT_BASE,
+            ...seg,
             ...SEGMENTED_ACTIVE,
             borderLeft: "1px solid var(--border-color)",
             cursor: "default",
@@ -78,7 +90,7 @@ export function AppNavTasksPages({
         <Link
           href="/pages"
           style={{
-            ...SEGMENT_BASE,
+            ...seg,
             borderLeft: "1px solid var(--border-color)",
             background: "transparent",
             color: "var(--text-muted)",

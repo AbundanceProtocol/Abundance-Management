@@ -4,6 +4,8 @@ import type { TaskItem } from "./types";
 export function taskHasAnyUserData(task: TaskItem): boolean {
   if (task.title.trim().length > 0) return true;
   if (task.notes.trim().length > 0) return true;
+  if (task.recurringNotesPageId) return true;
+  if (task.recurringCompletionUntilIso) return true;
   if ((task.urls ?? []).some((u) => u.trim().length > 0)) return true;
   if (task.startDate || task.dueDate) return true;
   if (task.dueTime?.trim()) return true;

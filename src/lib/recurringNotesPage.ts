@@ -91,9 +91,13 @@ function renderRecurringNotesHtml(entries: RecurringNotesEntries): string {
     dates.length === 0
       ? `<p style="color: var(--text-muted); font-style: italic;">No notes yet.</p>`
       : dates
-          .map((date) => {
+          .map((date, idx) => {
             const text = cleaned[date] ?? "";
-            return `<div ${DATE_ATTR}="${date}">
+            const divider =
+              idx === 0
+                ? ""
+                : `<hr style="margin: 18px 0; border: 0; border-top: 1px solid var(--border-subtle); break-before: page; page-break-before: always;" />`;
+            return `${divider}<div ${DATE_ATTR}="${date}">
   <h3>${escapeHtml(date)}</h3>
   <pre ${NOTE_PRE_ATTR} style="margin: 8px 0 0; white-space: pre-wrap;">${escapeHtml(
     text

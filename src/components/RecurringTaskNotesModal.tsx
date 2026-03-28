@@ -112,7 +112,7 @@ export default function RecurringTaskNotesModal({
               cursor: "pointer",
             }}
           >
-            {saving ? "Saving…" : "Close"}
+            Close
           </button>
         </div>
 

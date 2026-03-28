@@ -56,9 +56,11 @@ import { emptyPageDocument, parsePageBody, serializePageDocument } from "@/lib/p
 import { orderTasksForPageLinkPicker } from "@/lib/pageTaskPickerOrder";
 import { useBoardDndSensors } from "@/lib/boardDndSensors";
 import { VIEWPORT_NARROW_MQ, useViewportNarrow } from "@/lib/useViewportNarrow";
+import TaskDetailPanel from "./TaskDetailPanel";
 
 const NEST_HOVER_MS = 1200;
 const PAGE_NEST_BELOW_PREFIX = "page-nest-below-";
+type MobileMenuKey = "layout" | "meta" | "toolbar" | "tasks";
 
 function newId(): string {
   if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
@@ -120,7 +122,7 @@ export default function PagesView() {
   const searchParams = useSearchParams();
   const initialPageId = searchParams.get("pageId");
   const initialTaskId = searchParams.get("taskId");
-  const { tasks, updateTask } = useTasks();
+  const { tasks, updateTask, createTask, reorderTasks } = useTasks();
   const { sections } = useSections();
   const [environment, setEnvironment] = useState<PagesEnvironment>(DEFAULT_PAGES_ENVIRONMENT);
   const [loading, setLoading] = useState(true);
@@ -135,10 +137,11 @@ export default function PagesView() {
   const hoverStartRef = useRef<number | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pagesSidebarMinimized, setPagesSidebarMinimized] = useState(false);
-  const [mobilePagesChromeCollapsed, setMobilePagesChromeCollapsed] = useState(true);
   const [mobilePaneMetaCollapsed, setMobilePaneMetaCollapsed] = useState(true);
+  const [mobileLayoutMenuOpen, setMobileLayoutMenuOpen] = useState(false);
   const [narrowMobileToolbarOpen, setNarrowMobileToolbarOpen] = useState(false);
   const [tasksPanelCollapsed, setTasksPanelCollapsed] = useState(true);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   /** Ignore collapse briefly after open — same tap can hit the panel collapse control after layout shifts. */
   const ignoreTasksPanelCloseUntilRef = useRef(0);
 
@@ -155,7 +158,7 @@ export default function PagesView() {
   useLayoutEffect(() => {
     if (typeof window === "undefined") return;
     if (window.matchMedia(VIEWPORT_NARROW_MQ).matches) {
-      setMobilePagesChromeCollapsed(true);
+      setMobileLayoutMenuOpen(false);
       setMobilePaneMetaCollapsed(true);
       setTasksPanelCollapsed(true);
       setNarrowMobileToolbarOpen(false);
@@ -176,6 +179,17 @@ export default function PagesView() {
     cursor: "pointer",
     flexShrink: 0,
   };
+  const mobileIconBtnStyle = useCallback(
+    (active: boolean): React.CSSProperties => ({
+      ...mobileIconBtn,
+      border: active
+        ? "1px solid rgba(96, 165, 250, 0.75)"
+        : "1px solid var(--border-color)",
+      background: active ? "rgba(59,130,246,0.2)" : "var(--bg-tertiary)",
+      color: active ? "var(--text-primary)" : "var(--text-primary)",
+    }),
+    [mobileIconBtn]
+  );
 
   const sensors = useBoardDndSensors();
 
@@ -455,6 +469,119 @@ export default function PagesView() {
   const panes = openPageIds.map((id) => getPage(id));
   const activePage = panes[activePaneIndex] ?? null;
   const activeEditing = editingByPane[activePaneIndex] ?? false;
+  const activeMobileMenu: MobileMenuKey | null = useMemo(() => {
+    if (!isNarrowPagesLayout) return null;
+    if (!tasksPanelCollapsed) return "tasks";
+    if (narrowMobileToolbarOpen) return "toolbar";
+    if (!mobilePaneMetaCollapsed) return "meta";
+    if (mobileLayoutMenuOpen) return "layout";
+    return null;
+  }, [
+    isNarrowPagesLayout,
+    tasksPanelCollapsed,
+    narrowMobileToolbarOpen,
+    mobilePaneMetaCollapsed,
+    mobileLayoutMenuOpen,
+  ]);
+  const selectedTask = useMemo(
+    () => tasks.find((t) => t._id === selectedTaskId) || null,
+    [tasks, selectedTaskId]
+  );
+  const selectedTaskSection = useMemo(
+    () =>
+      selectedTask
+        ? sections.find((s) => s._id === selectedTask.sectionId) ?? null
+        : null,
+    [sections, selectedTask]
+  );
+
+  useEffect(() => {
+    if (selectedTaskId && !tasks.some((t) => t._id === selectedTaskId)) {
+      setSelectedTaskId(null);
+    }
+  }, [tasks, selectedTaskId]);
+
+  const createTaskFromPage = useCallback(
+    async (page: MarkdownPageItem) => {
+      const rootTask = page.linkedTaskId
+        ? tasks.find((t) => t._id === page.linkedTaskId) ?? null
+        : null;
+      const rootSection = rootTask
+        ? sections.find((s) => s._id === rootTask.sectionId) ?? null
+        : null;
+      const fallbackSection = sections[0] ?? null;
+      const targetSection = rootSection ?? fallbackSection;
+      if (!targetSection) {
+        alert("Create a section first, then add a task.");
+        return;
+      }
+
+      const parentId = rootTask ? rootTask._id : null;
+      const depth = rootTask ? rootTask.depth + 1 : 0;
+      const created = await createTask(
+        targetSection._id,
+        parentId,
+        depth,
+        targetSection.type
+      );
+
+      if (!page.linkedTaskId) {
+        updatePage(page.id, { linkedTaskId: created._id });
+      }
+      setSelectedTaskId(created._id);
+    },
+    [tasks, sections, createTask, updatePage]
+  );
+
+  const closeMobileMenu = useCallback(() => {
+    setMobileLayoutMenuOpen(false);
+    setMobilePaneMetaCollapsed(true);
+    setNarrowMobileToolbarOpen(false);
+    setTasksPanelCollapsedSafe(true);
+  }, [setTasksPanelCollapsedSafe]);
+
+  const openMobileMenu = useCallback(
+    (menu: MobileMenuKey) => {
+      if (menu === "layout") {
+        setMobileLayoutMenuOpen(true);
+        setMobilePaneMetaCollapsed(true);
+        setNarrowMobileToolbarOpen(false);
+        setTasksPanelCollapsedSafe(true);
+        return;
+      }
+      if (menu === "meta") {
+        setMobileLayoutMenuOpen(false);
+        setMobilePaneMetaCollapsed(false);
+        setNarrowMobileToolbarOpen(false);
+        setTasksPanelCollapsedSafe(true);
+        return;
+      }
+      if (menu === "toolbar") {
+        setMobileLayoutMenuOpen(false);
+        setMobilePaneMetaCollapsed(true);
+        setNarrowMobileToolbarOpen(true);
+        setTasksPanelCollapsedSafe(true);
+        return;
+      }
+      ignoreTasksPanelCloseUntilRef.current = Date.now() + 1200;
+      setMobileLayoutMenuOpen(false);
+      setMobilePaneMetaCollapsed(true);
+      setNarrowMobileToolbarOpen(false);
+      setTasksPanelCollapsed(false);
+    },
+    [setTasksPanelCollapsedSafe]
+  );
+
+  const toggleMobileMenu = useCallback(
+    (menu: MobileMenuKey) => {
+      if (activeMobileMenu === menu) {
+        closeMobileMenu();
+        return;
+      }
+      openMobileMenu(menu);
+    },
+    [activeMobileMenu, closeMobileMenu, openMobileMenu]
+  );
 
   if (loading) {
     return (
@@ -579,87 +706,118 @@ export default function PagesView() {
           overflow: "hidden",
         }}
       >
-        {isNarrowPagesLayout && mobilePagesChromeCollapsed ? (
-          <div
-            style={{
-              flexShrink: 0,
-              padding: "6px 10px",
-              borderBottom: "1px solid var(--border-color)",
-              background: "var(--bg-secondary)",
-              display: "flex",
-              flexDirection: "row",
-              flexWrap: "nowrap",
-              alignItems: "center",
-              gap: 8,
-              overflowX: "auto",
-              overflowY: "hidden",
-              WebkitOverflowScrolling: "touch",
-            }}
-          >
-            {sidebarHidden && (
+        {isNarrowPagesLayout ? (
+          <>
+            <div
+              style={{
+                flexShrink: 0,
+                padding: "6px 10px",
+                borderBottom: "1px solid var(--border-color)",
+                background: "var(--bg-secondary)",
+                display: "flex",
+                flexDirection: "row",
+                flexWrap: "nowrap",
+                alignItems: "center",
+                gap: 8,
+                overflowX: "auto",
+                overflowY: "hidden",
+                WebkitOverflowScrolling: "touch",
+              }}
+            >
               <button
                 type="button"
-                onClick={() => setPagesSidebarMinimized(false)}
+                onClick={() => {
+                  setPagesSidebarMinimized(false);
+                  closeMobileMenu();
+                }}
                 title="Pages list"
                 aria-label="Pages list"
-                style={mobileIconBtn}
+                style={mobileIconBtnStyle(!sidebarHidden)}
               >
                 <FileText size={20} />
               </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setMobilePagesChromeCollapsed(false)}
-              title="Panes and layout"
-              aria-label="Panes and layout"
-              style={mobileIconBtn}
-            >
-              <LayoutGrid size={20} />
-            </button>
-            {activePage && mobilePaneMetaCollapsed && (
               <button
                 type="button"
-                onClick={() => setMobilePaneMetaCollapsed(false)}
-                title="Page title and root task"
-                aria-label="Page title and root task"
-                style={mobileIconBtn}
+                onClick={() => toggleMobileMenu("layout")}
+                title="Panes and layout"
+                aria-label="Panes and layout"
+                style={mobileIconBtnStyle(activeMobileMenu === "layout")}
               >
-                <Menu size={20} />
+                <LayoutGrid size={20} />
               </button>
-            )}
-            {activePage && activeEditing && !narrowMobileToolbarOpen && (
-              <>
+              {activePage && (
                 <button
                   type="button"
-                  onClick={() => setNarrowMobileToolbarOpen(true)}
-                  title="Formatting and link to task"
-                  aria-label="Formatting and link to task"
-                  style={mobileIconBtn}
+                  onClick={() => toggleMobileMenu("meta")}
+                  title="Page title and root task"
+                  aria-label="Page title and root task"
+                  style={mobileIconBtnStyle(activeMobileMenu === "meta")}
                 >
-                  <Pencil size={20} />
+                  <Menu size={20} />
                 </button>
-                <button
-                  type="button"
-                  onPointerDown={(e) => {
-                    e.stopPropagation();
-                    // Open + ignore window before layout shift so a trailing click cannot hit the panel collapse.
-                    ignoreTasksPanelCloseUntilRef.current = Date.now() + 1200;
-                    setTasksPanelCollapsed(false);
-                  }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    ignoreTasksPanelCloseUntilRef.current = Date.now() + 1200;
-                    setTasksPanelCollapsed(false);
-                  }}
-                  title="Linked tasks"
-                  aria-label="Linked tasks"
-                  style={mobileIconBtn}
-                >
-                  <Check size={20} />
-                </button>
-              </>
+              )}
+              {activePage && activeEditing && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => toggleMobileMenu("toolbar")}
+                    title="Formatting and link to task"
+                    aria-label="Formatting and link to task"
+                    style={mobileIconBtnStyle(activeMobileMenu === "toolbar")}
+                  >
+                    <Pencil size={20} />
+                  </button>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleMobileMenu("tasks");
+                    }}
+                    title="Linked tasks"
+                    aria-label="Linked tasks"
+                    style={mobileIconBtnStyle(activeMobileMenu === "tasks")}
+                  >
+                    <Check size={20} />
+                  </button>
+                </>
+              )}
+            </div>
+            {activeMobileMenu === "layout" && (
+              <div
+                style={{
+                  flexShrink: 0,
+                  padding: "6px 10px 8px",
+                  borderBottom: "1px solid var(--border-color)",
+                  background: "var(--bg-secondary)",
+                  display: "flex",
+                  gap: 6,
+                  overflowX: "auto",
+                  overflowY: "hidden",
+                }}
+              >
+                {[1, 2, 3, 4].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setPaneCount(n as 1 | 2 | 3 | 4)}
+                    style={{
+                      minWidth: 38,
+                      padding: "6px 10px",
+                      borderRadius: 6,
+                      border: "1px solid var(--border-color)",
+                      background: paneCount === n ? "var(--bg-tertiary)" : "transparent",
+                    }}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
             )}
-          </div>
+          </>
         ) : (
           <>
             {sidebarHidden && (
@@ -724,39 +882,25 @@ export default function PagesView() {
               }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                {isNarrowPagesLayout && (
-                  <button
-                    type="button"
-                    onClick={() => setMobilePagesChromeCollapsed(true)}
-                    title="Minimize header"
-                    aria-label="Minimize header"
-                    style={{
-                      ...mobileIconBtn,
-                      width: 40,
-                      height: 40,
-                    }}
-                  >
-                    <ChevronLeft size={18} />
-                  </button>
-                )}
                 <h1 style={{ margin: 0, fontSize: isNarrowPagesLayout ? 17 : 20 }}>Pages</h1>
               </div>
               <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                {[1, 2, 3, 4].map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => setPaneCount(n as 1 | 2 | 3 | 4)}
-                    style={{
-                      padding: "6px 10px",
-                      borderRadius: 6,
-                      border: "1px solid var(--border-color)",
-                      background: paneCount === n ? "var(--bg-tertiary)" : "transparent",
-                    }}
-                  >
-                    {n}
-                  </button>
-                ))}
+                {(!isNarrowPagesLayout || activeMobileMenu === "layout") &&
+                  [1, 2, 3, 4].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setPaneCount(n as 1 | 2 | 3 | 4)}
+                      style={{
+                        padding: "6px 10px",
+                        borderRadius: 6,
+                        border: "1px solid var(--border-color)",
+                        background: paneCount === n ? "var(--bg-tertiary)" : "transparent",
+                      }}
+                    >
+                      {n}
+                    </button>
+                  ))}
               </div>
             </header>
           </>
@@ -797,33 +941,7 @@ export default function PagesView() {
                   background: activePaneIndex === paneIdx ? "rgba(59,130,246,0.03)" : "transparent",
                 }}
               >
-                {page && isNarrowPagesLayout && mobilePaneMetaCollapsed ? (
-                  mobilePagesChromeCollapsed ? null : (
-                    <div
-                      style={{
-                        flexShrink: 0,
-                        position: "sticky",
-                        top: 0,
-                        zIndex: 25,
-                        borderBottom: "1px solid var(--border-subtle)",
-                        padding: "6px 8px",
-                        display: "flex",
-                        justifyContent: "flex-end",
-                        background: "var(--bg-primary)",
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setMobilePaneMetaCollapsed(false)}
-                        title="Page title and root task"
-                        aria-label="Page title and root task"
-                        style={mobileIconBtn}
-                      >
-                        <Menu size={18} />
-                      </button>
-                    </div>
-                  )
-                ) : (
+                {page && isNarrowPagesLayout && mobilePaneMetaCollapsed ? null : (
                 <div
                   style={{
                     flexShrink: 0,
@@ -840,17 +958,6 @@ export default function PagesView() {
                     background: "var(--bg-primary)",
                   }}
                 >
-                  {isNarrowPagesLayout && page && (
-                    <button
-                      type="button"
-                      onClick={() => setMobilePaneMetaCollapsed(true)}
-                      title="Minimize page bar"
-                      aria-label="Minimize page bar"
-                      style={{ ...mobileIconBtn, alignSelf: "flex-start", width: 40, height: 40 }}
-                    >
-                      <ChevronLeft size={18} />
-                    </button>
-                  )}
                   <div
                     style={{
                       fontSize: 13,
@@ -908,6 +1015,27 @@ export default function PagesView() {
                             );
                           })}
                         </select>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void createTaskFromPage(page);
+                          }}
+                          title="Create a new task for this page"
+                          style={{
+                            fontSize: 12,
+                            maxWidth: isNarrowPagesLayout ? "100%" : 140,
+                            width: isNarrowPagesLayout ? "100%" : undefined,
+                            minWidth: 0,
+                            padding: "6px 10px",
+                            borderRadius: 6,
+                            border: "1px solid var(--border-color)",
+                            background: "var(--bg-tertiary)",
+                            color: "var(--text-primary)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          New task
+                        </button>
                       </div>
                     ) : (
                       "Empty pane"
@@ -1047,6 +1175,22 @@ export default function PagesView() {
           })}
         </div>
       </main>
+      {selectedTask && (
+        <TaskDetailPanel
+          key={selectedTask._id}
+          task={selectedTask}
+          section={selectedTaskSection}
+          directChildCount={
+            tasks.filter((t) => t.parentId === selectedTask._id).length
+          }
+          onUpdate={updateTask}
+          onClose={() => setSelectedTaskId(null)}
+          tasks={tasks}
+          reorderTasks={reorderTasks}
+          createTask={createTask}
+          onNavigateToTask={(id) => setSelectedTaskId(id)}
+        />
+      )}
     </div>
   );
 }

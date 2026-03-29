@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { connectToDatabase } from "@/lib/mongodb";
-import { ObjectId } from "mongodb";
+import { getDataStore } from "@/lib/dataStore/factory";
 import { getAuthState, unauthorized } from "@/lib/auth";
 
 export async function POST(request: Request) {
@@ -23,54 +22,13 @@ export async function POST(request: Request) {
       );
     }
 
-    const { db } = await connectToDatabase();
-
-    await Promise.all([
-      db.collection("sections").deleteMany({}),
-      db.collection("tasks").deleteMany({}),
-    ]);
-
-    if (body.sections.length > 0) {
-      const sectionDocs = body.sections.map(
-        (s: Record<string, unknown>) => {
-          const { _id, ...rest } = s;
-          return {
-            ...rest,
-            _id: ObjectId.isValid(String(_id))
-              ? new ObjectId(String(_id))
-              : new ObjectId(),
-          };
-        }
-      );
-      await db.collection("sections").insertMany(sectionDocs);
-    }
-
-    if (body.tasks.length > 0) {
-      const taskDocs = body.tasks.map((t: Record<string, unknown>) => {
-        const { _id, ...rest } = t;
-        return {
-          ...rest,
-          _id: ObjectId.isValid(String(_id))
-            ? new ObjectId(String(_id))
-            : new ObjectId(),
-        };
-      });
-      await db.collection("tasks").insertMany(taskDocs);
-    }
-
-    if (body.pagesEnvironment != null) {
-      await db.collection("pages_environment").updateOne(
-        { _id: "default" as unknown as import("mongodb").ObjectId },
-        {
-          $set: {
-            environment: body.pagesEnvironment,
-            updatedAt: new Date().toISOString(),
-          },
-          $setOnInsert: { createdAt: new Date().toISOString() },
-        },
-        { upsert: true }
-      );
-    }
+    const store = await getDataStore();
+    await store.backupImport({
+      version: body.version,
+      sections: body.sections,
+      tasks: body.tasks,
+      pagesEnvironment: body.pagesEnvironment,
+    });
 
     return NextResponse.json({
       success: true,

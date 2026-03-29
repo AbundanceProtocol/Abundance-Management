@@ -597,7 +597,7 @@ export default function GTDBoard() {
       >
         {viewportNarrow && !mobileBoardMenuOpen && (
           <MobileAppMenuCollapsedBar
-            title="Abundance Strategy"
+            title="Project Manager"
             subtitle={`${tasksViewShortLabel(tasksView)} · ${boardLayoutModeLabel(boardLayoutMode)}`}
             menuId="board-full-menu"
             onExpand={() => setMobileBoardMenuOpen(true)}
@@ -674,7 +674,7 @@ export default function GTDBoard() {
                     minWidth: 0,
                   }}
                 >
-                  Abundance Strategy
+                  Project Manager
                 </h1>
                 <MobileAppMenuCollapseButton
                   inline
@@ -692,7 +692,7 @@ export default function GTDBoard() {
                   letterSpacing: "-0.01em",
                 }}
               >
-                Abundance Strategy
+                Project Manager
               </h1>
             )}
             <p

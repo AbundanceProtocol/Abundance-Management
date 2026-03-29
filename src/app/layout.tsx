@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Abundance Strategy - GTD + CPM",
+  title: "Project Manager - GTD + CPM",
   description: "Getting Things Done with Critical Path Method",
 };
 

@@ -1,15 +1,7 @@
 import { NextResponse } from "next/server";
-import { connectToDatabase } from "@/lib/mongodb";
-import { ObjectId } from "mongodb";
+import { getDataStore } from "@/lib/dataStore/factory";
+import type { ReorderItem } from "@/lib/dataStore/types";
 import { getAuthState, unauthorized } from "@/lib/auth";
-
-interface ReorderItem {
-  _id: string;
-  order: number;
-  parentId: string | null;
-  depth: number;
-  sectionId: string;
-}
 
 export async function PUT(request: Request) {
   try {
@@ -18,27 +10,10 @@ export async function PUT(request: Request) {
       return unauthorized();
     }
 
-    const { db } = await connectToDatabase();
+    const store = await getDataStore();
     const items: ReorderItem[] = await request.json();
 
-    const ops = items.map((item) => ({
-      updateOne: {
-        filter: { _id: new ObjectId(item._id) },
-        update: {
-          $set: {
-            order: item.order,
-            parentId: item.parentId,
-            depth: item.depth,
-            sectionId: item.sectionId,
-            updatedAt: new Date().toISOString(),
-          },
-        },
-      },
-    }));
-
-    if (ops.length > 0) {
-      await db.collection("tasks").bulkWrite(ops);
-    }
+    await store.reorderTasks(items);
 
     return NextResponse.json({ success: true });
   } catch (error) {

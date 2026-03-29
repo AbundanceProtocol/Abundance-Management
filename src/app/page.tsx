@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import GTDBoard from "@/components/GTDBoard";
 import { hasServerEditSession } from "@/lib/auth-server";
 import { isAuthDisabled } from "@/lib/auth";
+import { needsSetupWizard } from "@/lib/setupWizard";
 
 function BoardFallback() {
   return (
@@ -22,6 +23,9 @@ function BoardFallback() {
 }
 
 export default async function Home() {
+  if (!isAuthDisabled() && needsSetupWizard()) {
+    redirect("/setup");
+  }
   if (!isAuthDisabled() && !(await hasServerEditSession())) {
     redirect("/login");
   }

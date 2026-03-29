@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "crypto";
+import { getAuthSecret as readAuthSecret } from "@/lib/appConfig";
 
 export const SESSION_COOKIE = "ab_session";
 
@@ -8,35 +9,57 @@ export function isAuthDisabled(): boolean {
 }
 
 function getSecret(): string {
-  return process.env.AUTH_SECRET ?? "";
+  return readAuthSecret();
 }
 
 function signPayload(payload: string): string {
   return createHmac("sha256", getSecret()).update(payload).digest("hex");
 }
 
-export function createSessionToken(): string {
+export type SessionPayload = {
+  exp: number;
+  /** Logged-in username (lowercase) when using database accounts. */
+  u?: string;
+  /** True when signed in with APP_PASSWORD (legacy). */
+  leg?: boolean;
+};
+
+export function createSessionToken(opts?: {
+  username?: string;
+  legacy?: boolean;
+}): string {
   const exp = Date.now() + 7 * 24 * 60 * 60 * 1000;
-  const payload = JSON.stringify({ exp });
+  const body: SessionPayload = { exp };
+  if (opts?.legacy) body.leg = true;
+  else if (opts?.username?.trim()) body.u = opts.username.trim().toLowerCase();
+  const payload = JSON.stringify(body);
   const sig = signPayload(payload);
   return Buffer.from(JSON.stringify({ p: payload, s: sig }), "utf8").toString(
     "base64url"
   );
 }
 
-export function verifySessionToken(value: string | undefined): boolean {
-  if (!value || !getSecret()) return false;
+/** Returns parsed session claims if the cookie is valid and not expired. */
+export function getVerifiedSessionPayload(
+  value: string | undefined
+): SessionPayload | null {
+  if (!value || !getSecret()) return null;
   try {
     const raw = Buffer.from(value, "base64url").toString("utf8");
     const { p, s } = JSON.parse(raw) as { p: string; s: string };
     const expected = signPayload(p);
-    if (expected.length !== s.length) return false;
-    if (!timingSafeEqual(Buffer.from(expected), Buffer.from(s))) return false;
-    const { exp } = JSON.parse(p) as { exp: number };
-    return typeof exp === "number" && Date.now() < exp;
+    if (expected.length !== s.length) return null;
+    if (!timingSafeEqual(Buffer.from(expected), Buffer.from(s))) return null;
+    const payload = JSON.parse(p) as SessionPayload;
+    if (typeof payload.exp !== "number" || Date.now() >= payload.exp) return null;
+    return payload;
   } catch {
-    return false;
+    return null;
   }
+}
+
+export function verifySessionToken(value: string | undefined): boolean {
+  return getVerifiedSessionPayload(value) != null;
 }
 
 export function parseCookieHeader(

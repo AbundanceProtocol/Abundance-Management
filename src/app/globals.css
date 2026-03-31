@@ -80,7 +80,7 @@ button {
 .task-row-inner {
   cursor: pointer;
 }
-
+ 
 /* Task row hover effects */
 .task-row-inner:hover {
   background: var(--bg-hover) !important;
@@ -529,4 +529,46 @@ button {
 .workspace-md pre code {
   padding: 0;
   background: none;
+}
+
+/* Mind map node hover actions */
+.react-flow__node:hover .mindmap-node-actions {
+  opacity: 1 !important;
+}
+
+/* Mind map link anchors (handles on each edge) */
+.react-flow__node .mindmap-handle {
+  /* Keep handles functional but visually minimal/invisible. */
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  opacity: 0 !important;
+  transition: none;
+}
+
+/* Recurring daily notes: timer finished — pulse note border green */
+@keyframes recurring-notes-timer-done {
+  0%,
+  100% {
+    border-color: var(--border-color);
+    box-shadow: none;
+  }
+  50% {
+    border-color: var(--accent-green);
+    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.4);
+  }
+}
+
+.recurring-notes-text--timer-done {
+  animation: recurring-notes-timer-done 0.55s ease-in-out 6;
+}
+
+/* Recurring notes timer: running state looks like plain text (hide number spinners) */
+.recurring-notes-timer-input-flat {
+  -moz-appearance: textfield;
+}
+.recurring-notes-timer-input-flat::-webkit-outer-spin-button,
+.recurring-notes-timer-input-flat::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }

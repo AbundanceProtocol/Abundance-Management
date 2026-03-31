@@ -2,8 +2,10 @@ import { randomUUID } from "crypto";
 import type { Pool } from "pg";
 import type { AppDataStore, BackupPayload, ReorderItem, UserRecord } from "@/lib/dataStore/types";
 import type { PagesEnvironment } from "@/lib/pagesTypes";
+import type { MindMapsEnvironment } from "@/lib/mindMapTypes";
 import type { NewTask, Section, TaskItem } from "@/lib/types";
 import { DEFAULT_PAGES_ENVIRONMENT } from "@/lib/pagesTypes";
+import { DEFAULT_MIND_MAPS_ENVIRONMENT } from "@/lib/mindMapTypes";
 import { normalizeUrlsFromDoc } from "@/lib/taskUrls";
 import { subtreeNodesPreorder } from "@/lib/duplicateTaskTree";
 
@@ -261,17 +263,37 @@ export function buildPostgresDataStore(pool: Pool): AppDataStore {
       );
     },
 
+    async getMindMapsEnvironment() {
+      const { rows } = await pool.query<{ doc: unknown }>(
+        "SELECT doc FROM mind_maps_environment WHERE id = 'default'"
+      );
+      const row = rows[0];
+      if (!row) return DEFAULT_MIND_MAPS_ENVIRONMENT;
+      return parseDoc<MindMapsEnvironment>(row.doc);
+    },
+
+    async setMindMapsEnvironment(environment) {
+      const updatedAt = new Date().toISOString();
+      await pool.query(
+        `INSERT INTO mind_maps_environment (id, doc, updated_at) VALUES ('default', $1::jsonb, $2)
+         ON CONFLICT (id) DO UPDATE SET doc = EXCLUDED.doc, updated_at = EXCLUDED.updated_at`,
+        [JSON.stringify(environment), updatedAt]
+      );
+    },
+
     async backupExport() {
-      const [sec, task, page] = await Promise.all([
+      const [sec, task, page, mindMaps] = await Promise.all([
         pool.query<{ id: string; doc: unknown }>("SELECT id, doc FROM sections"),
         pool.query<{ id: string; doc: unknown }>("SELECT id, doc FROM tasks"),
         pool.query<{ doc: unknown }>("SELECT doc FROM pages_environment WHERE id = 'default'"),
+        pool.query<{ doc: unknown }>("SELECT doc FROM mind_maps_environment WHERE id = 'default'"),
       ]);
       const stringify = (id: string, obj: Record<string, unknown>) => {
         const { _id, ...rest } = obj;
         return { ...rest, _id: id };
       };
       const pageRow = page.rows[0];
+      const mindMapsRow = mindMaps.rows[0];
       return {
         version: 1,
         exportedAt: new Date().toISOString(),
@@ -282,6 +304,7 @@ export function buildPostgresDataStore(pool: Pool): AppDataStore {
           stringify(r.id, parseDoc<Record<string, unknown>>(r.doc))
         ),
         pagesEnvironment: pageRow ? parseDoc<unknown>(pageRow.doc) : null,
+        mindMapsEnvironment: mindMapsRow ? parseDoc<unknown>(mindMapsRow.doc) : null,
       } as BackupPayload;
     },
 
@@ -312,6 +335,14 @@ export function buildPostgresDataStore(pool: Pool): AppDataStore {
           [JSON.stringify(body.pagesEnvironment), updatedAt]
         );
       }
+      if ((body as Record<string, unknown>).mindMapsEnvironment != null) {
+        const updatedAt = new Date().toISOString();
+        await pool.query(
+          `INSERT INTO mind_maps_environment (id, doc, updated_at) VALUES ('default', $1::jsonb, $2)
+           ON CONFLICT (id) DO UPDATE SET doc = EXCLUDED.doc, updated_at = EXCLUDED.updated_at`,
+          [JSON.stringify((body as Record<string, unknown>).mindMapsEnvironment), updatedAt]
+        );
+      }
     },
 
     async resetApplicationData() {
@@ -322,6 +353,11 @@ export function buildPostgresDataStore(pool: Pool): AppDataStore {
         `INSERT INTO pages_environment (id, doc, updated_at) VALUES ('default', $1::jsonb, $2)
          ON CONFLICT (id) DO UPDATE SET doc = EXCLUDED.doc, updated_at = EXCLUDED.updated_at`,
         [JSON.stringify(DEFAULT_PAGES_ENVIRONMENT), updatedAt]
+      );
+      await pool.query(
+        `INSERT INTO mind_maps_environment (id, doc, updated_at) VALUES ('default', $1::jsonb, $2)
+         ON CONFLICT (id) DO UPDATE SET doc = EXCLUDED.doc, updated_at = EXCLUDED.updated_at`,
+        [JSON.stringify(DEFAULT_MIND_MAPS_ENVIRONMENT), updatedAt]
       );
     },
 

@@ -6,6 +6,8 @@ export interface MarkdownPageItem {
   parentId: string | null;
   depth: number;
   order: number;
+  /** Set on child pages under a recurring hub: `YYYY-MM-DD`. */
+  recurringNoteDateYmd?: string | null;
 }
 
 export interface PagesEnvironment {

@@ -25,6 +25,7 @@ import {
   DEFAULT_MARKDOWN_SIZE,
 } from "@/lib/workspaceTypes";
 import { normalizeWorkspace } from "@/lib/workspaceNormalize";
+import { getActiveTodayFocusYmd } from "@/lib/todayFocus";
 import {
   WORLD_CANVAS_SIZE,
   ZOOM_MIN,
@@ -1623,9 +1624,10 @@ function WorkspaceTaskRow({
               e.stopPropagation();
               const pageId = task.recurringNotesPageId;
               if (!pageId) return;
+              const ymd = getActiveTodayFocusYmd();
               window.location.href = `/pages?pageId=${encodeURIComponent(
                 pageId
-              )}&taskId=${encodeURIComponent(task._id)}`;
+              )}&taskId=${encodeURIComponent(task._id)}&date=${encodeURIComponent(ymd)}`;
             }}
             style={{
               flexShrink: 0,

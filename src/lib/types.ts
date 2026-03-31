@@ -74,6 +74,10 @@ export interface TaskItem {
   workspace?: TaskWorkspaceState;
   /** Optional linked standalone page id. */
   linkedPageId?: string | null;
+  /** Optional linked mind map id. */
+  mindMapId?: string | null;
+  /** When true, task only lives inside a mind map and is hidden from the Tasks board. */
+  mindMapOnly?: boolean;
   /**
    * When set, this task is selected for "Today’s focus".
    * Stored as a YYYY-MM-DD local date corresponding to the active focus period

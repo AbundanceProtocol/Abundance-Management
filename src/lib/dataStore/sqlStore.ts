@@ -12,6 +12,7 @@ async function ensurePg(pool: Pool) {
     `CREATE TABLE IF NOT EXISTS sections (id TEXT PRIMARY KEY, doc JSONB NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, doc JSONB NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS pages_environment (id TEXT PRIMARY KEY, doc JSONB NOT NULL, updated_at TEXT)`,
+    `CREATE TABLE IF NOT EXISTS mind_maps_environment (id TEXT PRIMARY KEY, doc JSONB NOT NULL, updated_at TEXT)`,
     `CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, email TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL, created_at TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS password_reset_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL, expires_at TEXT NOT NULL)`,
   ];
@@ -23,6 +24,7 @@ function ensureSqlite(db: Database.Database) {
     CREATE TABLE IF NOT EXISTS sections (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS pages_environment (id TEXT PRIMARY KEY, doc TEXT NOT NULL, updated_at TEXT);
+    CREATE TABLE IF NOT EXISTS mind_maps_environment (id TEXT PRIMARY KEY, doc TEXT NOT NULL, updated_at TEXT);
     CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, email TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS password_reset_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL, expires_at TEXT NOT NULL);
   `);

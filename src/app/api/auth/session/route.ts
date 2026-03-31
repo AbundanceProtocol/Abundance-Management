@@ -40,6 +40,8 @@ export async function GET(request: Request) {
         !skipAuth &&
         !hasUserClaim &&
         !legacyClaim,
+      /** True when app-config has completed DB setup (Mongo/Postgres/SQLite + admin). */
+      databaseSetupComplete: setupDone,
     },
   });
 }

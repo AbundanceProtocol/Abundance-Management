@@ -1,9 +1,11 @@
 import { MongoClient, Db, ObjectId } from "mongodb";
 import type { AppDataStore, BackupPayload, ReorderItem, UserRecord } from "@/lib/dataStore/types";
 import type { PagesEnvironment } from "@/lib/pagesTypes";
+import type { MindMapsEnvironment } from "@/lib/mindMapTypes";
 import type { NewTask, Section, TaskItem } from "@/lib/types";
 import { readAppConfig } from "@/lib/appConfig";
 import { DEFAULT_PAGES_ENVIRONMENT } from "@/lib/pagesTypes";
+import { DEFAULT_MIND_MAPS_ENVIRONMENT } from "@/lib/mindMapTypes";
 import { normalizeUrlsFromDoc } from "@/lib/taskUrls";
 import { subtreeNodesPreorder } from "@/lib/duplicateTaskTree";
 
@@ -26,6 +28,14 @@ function resolveDbName(): string {
 let client: MongoClient | null = null;
 let db: Db | null = null;
 let cacheKey = "";
+
+/** Close any cached Mongo connection (e.g. after database configuration reset). */
+export async function disconnectMongoStore(): Promise<void> {
+  if (client) await client.close().catch(() => {});
+  client = null;
+  db = null;
+  cacheKey = "";
+}
 
 async function getDb(): Promise<Db> {
   const key = resolveUri() + "|" + resolveDbName();
@@ -198,11 +208,26 @@ export async function createMongoStore(): Promise<AppDataStore> {
       );
     },
 
+    async getMindMapsEnvironment() {
+      const doc = await database.collection<{ _id: string; environment?: MindMapsEnvironment }>("mind_maps_environment").findOne({ _id: "default" });
+      return doc?.environment ?? DEFAULT_MIND_MAPS_ENVIRONMENT;
+    },
+
+    async setMindMapsEnvironment(environment) {
+      const updatedAt = new Date().toISOString();
+      await database.collection("mind_maps_environment").updateOne(
+        { _id: "default" as unknown as ObjectId },
+        { $set: { environment, updatedAt }, $setOnInsert: { createdAt: updatedAt } },
+        { upsert: true }
+      );
+    },
+
     async backupExport() {
-      const [sections, tasks, pagesDoc] = await Promise.all([
+      const [sections, tasks, pagesDoc, mindMapsDoc] = await Promise.all([
         database.collection("sections").find().sort({ order: 1 }).toArray(),
         database.collection("tasks").find().sort({ order: 1 }).toArray(),
         database.collection("pages_environment").findOne({ _id: "default" as unknown as ObjectId }),
+        database.collection("mind_maps_environment").findOne({ _id: "default" as unknown as ObjectId }),
       ]);
       const stringify = (doc: Record<string, unknown>) => {
         const { _id, ...rest } = doc;
@@ -214,6 +239,7 @@ export async function createMongoStore(): Promise<AppDataStore> {
         sections: sections.map((s) => stringify(s as Record<string, unknown>)),
         tasks: tasks.map((t) => stringify(t as Record<string, unknown>)),
         pagesEnvironment: pagesDoc ? (pagesDoc as Record<string, unknown>).environment ?? null : null,
+        mindMapsEnvironment: mindMapsDoc ? (mindMapsDoc as Record<string, unknown>).environment ?? null : null,
       };
     },
 
@@ -247,6 +273,16 @@ export async function createMongoStore(): Promise<AppDataStore> {
           { _id: "default" as unknown as ObjectId },
           {
             $set: { environment: body.pagesEnvironment, updatedAt: new Date().toISOString() },
+            $setOnInsert: { createdAt: new Date().toISOString() },
+          },
+          { upsert: true }
+        );
+      }
+      if ((body as Record<string, unknown>).mindMapsEnvironment != null) {
+        await database.collection("mind_maps_environment").updateOne(
+          { _id: "default" as unknown as ObjectId },
+          {
+            $set: { environment: (body as Record<string, unknown>).mindMapsEnvironment, updatedAt: new Date().toISOString() },
             $setOnInsert: { createdAt: new Date().toISOString() },
           },
           { upsert: true }
@@ -308,14 +344,24 @@ export async function createMongoStore(): Promise<AppDataStore> {
         database.collection("tasks").deleteMany({}),
       ]);
       const updatedAt = new Date().toISOString();
-      await database.collection("pages_environment").updateOne(
-        { _id: "default" as unknown as ObjectId },
-        {
-          $set: { environment: DEFAULT_PAGES_ENVIRONMENT, updatedAt },
-          $setOnInsert: { createdAt: updatedAt },
-        },
-        { upsert: true }
-      );
+      await Promise.all([
+        database.collection("pages_environment").updateOne(
+          { _id: "default" as unknown as ObjectId },
+          {
+            $set: { environment: DEFAULT_PAGES_ENVIRONMENT, updatedAt },
+            $setOnInsert: { createdAt: updatedAt },
+          },
+          { upsert: true }
+        ),
+        database.collection("mind_maps_environment").updateOne(
+          { _id: "default" as unknown as ObjectId },
+          {
+            $set: { environment: DEFAULT_MIND_MAPS_ENVIRONMENT, updatedAt },
+            $setOnInsert: { createdAt: updatedAt },
+          },
+          { upsert: true }
+        ),
+      ]);
     },
 
     async findUserById(userId) {

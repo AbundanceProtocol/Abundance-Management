@@ -53,7 +53,12 @@ import {
   MobileAppMenuCollapseButton,
   MOBILE_MENU_BUTTON,
 } from "./MobileAppMenu";
-import { Settings as SettingsIcon } from "./Icons";
+import {
+  ClipboardList,
+  FileText,
+  MindMap,
+  Settings as SettingsIcon,
+} from "./Icons";
 import SettingsModal from "./SettingsModal";
 import {
   filterSectionsByTasksView,
@@ -606,15 +611,46 @@ export default function GTDBoard() {
               <>
                 <Link
                   href="/"
-                  style={{ color: "var(--accent-blue)", fontWeight: 600 }}
+                  style={{
+                    color: "var(--accent-blue)",
+                    fontWeight: 600,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
                 >
+                  <ClipboardList size={12} />
                   Tasks
                 </Link>
                 <span style={{ color: "var(--text-muted)", margin: "0 6px" }}>
                   ·
                 </span>
-                <Link href="/pages" style={{ color: "var(--accent-blue)" }}>
+                <Link
+                  href="/pages"
+                  style={{
+                    color: "var(--accent-blue)",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
+                >
+                  <FileText size={12} />
                   Pages
+                </Link>
+                <span style={{ color: "var(--text-muted)", margin: "0 6px" }}>
+                  ·
+                </span>
+                <Link
+                  href="/mind-maps"
+                  style={{
+                    color: "var(--accent-blue)",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
+                >
+                  <MindMap size={12} />
+                  Mind Maps
                 </Link>
               </>
             }

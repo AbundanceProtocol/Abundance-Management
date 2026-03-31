@@ -29,6 +29,7 @@ import {
   ZoomIn,
   MoreVertical,
   FileText,
+  MindMap,
 } from "./Icons";
 
 const COMPACT_TASK_ACTIONS_MQ = "(max-width: 768px)";
@@ -654,9 +655,10 @@ export default function TaskRow({
                     e.stopPropagation();
                     const pageId = task.recurringNotesPageId;
                     if (!pageId) return;
+                    const ymd = getActiveTodayFocusYmd();
                     window.location.href = `/pages?pageId=${encodeURIComponent(
                       pageId
-                    )}&taskId=${encodeURIComponent(task._id)}`;
+                    )}&taskId=${encodeURIComponent(task._id)}&date=${encodeURIComponent(ymd)}`;
                   }}
                   style={{
                     flexShrink: 0,
@@ -700,6 +702,32 @@ export default function TaskRow({
                 }}
               >
                 <ZoomIn size={14} />
+              </Link>
+            )}
+
+            {!isEditing &&
+              task.mindMapId &&
+              task.parentId === null &&
+              childCount > 0 && (
+              <Link
+                href={`/mind-maps?mapId=${encodeURIComponent(task.mindMapId)}`}
+                onClick={(e) => e.stopPropagation()}
+                title="Open mind map"
+                style={{
+                  flexShrink: 0,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "4px 6px",
+                  borderRadius: 6,
+                  background: "rgba(168, 85, 247, 0.22)",
+                  border: "1px solid rgba(168, 85, 247, 0.5)",
+                  color: "rgb(168, 85, 247)",
+                  textDecoration: "none",
+                  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.12)",
+                }}
+              >
+                <MindMap size={14} />
               </Link>
             )}
             </div>

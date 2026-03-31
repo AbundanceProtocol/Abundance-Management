@@ -51,9 +51,15 @@ import {
   computePageSiblingMoveAfter,
 } from "@/lib/pagesReorder";
 import PageBlockEditor from "./PageBlockEditor";
+import RecurringNotesAggregateView from "./RecurringNotesAggregateView";
 import { AppNavTasksPages } from "./AppNavTasksPages";
 import { emptyPageDocument, parsePageBody, serializePageDocument } from "@/lib/pageDocument";
 import { orderTasksForPageLinkPicker } from "@/lib/pageTaskPickerOrder";
+import {
+  getOrCreateDayPage,
+  migrateLegacyHubBody,
+  pageBodyFromPlainText,
+} from "@/lib/recurringNotesPages";
 import { useBoardDndSensors } from "@/lib/boardDndSensors";
 import { VIEWPORT_NARROW_MQ, useViewportNarrow } from "@/lib/useViewportNarrow";
 import TaskDetailPanel from "./TaskDetailPanel";
@@ -89,6 +95,10 @@ function normalizeEnvironment(raw: PagesEnvironment | null | undefined): PagesEn
     parentId: it.parentId ?? null,
     depth: Number.isFinite(it.depth) ? it.depth : 0,
     order: Number.isFinite(it.order) ? it.order : idx,
+    recurringNoteDateYmd:
+      it.recurringNoteDateYmd === undefined || it.recurringNoteDateYmd === ""
+        ? null
+        : it.recurringNoteDateYmd,
   }));
   return { items };
 }
@@ -122,6 +132,7 @@ export default function PagesView() {
   const searchParams = useSearchParams();
   const initialPageId = searchParams.get("pageId");
   const initialTaskId = searchParams.get("taskId");
+  const initialDateYmd = searchParams.get("date");
   const { tasks, updateTask, createTask, reorderTasks } = useTasks();
   const { sections } = useSections();
   const [environment, setEnvironment] = useState<PagesEnvironment>(DEFAULT_PAGES_ENVIRONMENT);
@@ -144,6 +155,10 @@ export default function PagesView() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   /** Ignore collapse briefly after open — same tap can hit the panel collapse control after layout shifts. */
   const ignoreTasksPanelCloseUntilRef = useRef(0);
+  const deepLinkDateHandledRef = useRef(false);
+  const [recurringHubSortOrder, setRecurringHubSortOrder] = useState<"asc" | "desc">(
+    "desc"
+  );
 
   const setTasksPanelCollapsedSafe = useCallback((collapsed: boolean) => {
     if (collapsed && Date.now() < ignoreTasksPanelCloseUntilRef.current) {
@@ -236,12 +251,70 @@ export default function PagesView() {
             });
           }
         }
-        setEnvironment(normalized);
+
+        let preferred: string | null = null;
         if (normalized.items.length > 0) {
-          const preferred =
+          const basePreferred =
             initialPageId && normalized.items.some((p) => p.id === initialPageId)
               ? initialPageId
               : normalized.items[0].id;
+          preferred = basePreferred;
+
+          const deepDate =
+            initialDateYmd &&
+            initialPageId &&
+            initialTaskId &&
+            /^\d{4}-\d{2}-\d{2}$/.test(initialDateYmd.trim())
+              ? initialDateYmd.trim()
+              : null;
+
+          if (
+            deepDate &&
+            initialPageId &&
+            initialTaskId &&
+            !deepLinkDateHandledRef.current
+          ) {
+            deepLinkDateHandledRef.current = true;
+            const taskId = initialTaskId;
+            const hub = normalized.items.find((p) => p.id === initialPageId);
+            if (hub && hub.linkedTaskId === taskId) {
+              let items = normalized.items;
+              const migrated = migrateLegacyHubBody(items, hub.id, taskId);
+              items = migrated.items;
+              if (migrated.migrated) {
+                await fetch("/api/pages", {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ items }),
+                });
+              }
+              const hubItem = items.find((p) => p.id === hub.id);
+              if (hubItem) {
+                const { items: withDay, dayPageId } = getOrCreateDayPage(
+                  items,
+                  hubItem,
+                  taskId,
+                  deepDate
+                );
+                if (withDay.length > items.length) {
+                  await fetch("/api/pages", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ items: withDay }),
+                  });
+                  items = withDay;
+                } else {
+                  items = withDay;
+                }
+                normalized = { items };
+                preferred = dayPageId;
+              }
+            }
+          }
+        }
+
+        setEnvironment(normalized);
+        if (normalized.items.length > 0 && preferred) {
           setSelectedPageId(preferred);
           setOpenPageIds([preferred]);
         }
@@ -250,7 +323,22 @@ export default function PagesView() {
       }
     };
     void load();
-  }, [initialPageId, initialTaskId]);
+  }, [initialPageId, initialTaskId, initialDateYmd]);
+
+  useEffect(() => {
+    if (!selectedPageId) return;
+    const page = environment.items.find((p) => p.id === selectedPageId);
+    if (!page?.linkedTaskId) return;
+    const task = tasks.find((t) => t._id === page.linkedTaskId);
+    if (!task || task.recurringNotesPageId !== page.id) return;
+    const sec = sections.find((s) => s._id === task.sectionId);
+    if (sec?.type !== "recurring") return;
+
+    const migrated = migrateLegacyHubBody(environment.items, page.id, task._id);
+    if (migrated.migrated) {
+      setAndPersist(() => ({ items: migrated.items }));
+    }
+  }, [selectedPageId, environment.items, tasks, sections, setAndPersist]);
 
   useEffect(() => {
     setOpenPageIds((prev) => {
@@ -922,6 +1010,16 @@ export default function PagesView() {
             const linkTaskOptions = page
               ? linkPickerTasksByPageId.get(page.id) ?? []
               : [];
+            const recurringHubTask =
+              page &&
+              page.linkedTaskId &&
+              (() => {
+                const t = tasks.find((tk) => tk._id === page.linkedTaskId);
+                if (!t || t.recurringNotesPageId !== page.id) return null;
+                const sec = sections.find((s) => s._id === t.sectionId);
+                if (sec?.type !== "recurring") return null;
+                return t;
+              })();
             return (
               <section
                 key={paneIdx}
@@ -1151,6 +1249,33 @@ export default function PagesView() {
                   <div style={{ padding: 16, color: "var(--text-muted)", fontStyle: "italic" }}>
                     Select a page from the left panel.
                   </div>
+                ) : recurringHubTask ? (
+                  <>
+                    <RecurringNotesAggregateView
+                      hubTitle={page.title}
+                      hubId={page.id}
+                      items={environment.items}
+                      sortOrder={recurringHubSortOrder}
+                      onSortOrderChange={setRecurringHubSortOrder}
+                      onSaveDayPagePlain={(pageId, plainText) =>
+                        updatePage(pageId, {
+                          body: pageBodyFromPlainText(plainText),
+                        })
+                      }
+                      onOpenDayPage={(id) => openPageInActivePane(id)}
+                    />
+                    <div
+                      style={{
+                        padding: 16,
+                        color: "var(--text-muted)",
+                        fontSize: 13,
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      Day notes save automatically. Child pages also appear in the sidebar under
+                      this hub.
+                    </div>
+                  </>
                 ) : (
                   <PageBlockEditor
                     key={`${paneIdx}-${page.id}`}

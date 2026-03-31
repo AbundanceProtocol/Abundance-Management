@@ -2,8 +2,10 @@ import { randomUUID } from "crypto";
 import type Database from "better-sqlite3";
 import type { AppDataStore, BackupPayload, ReorderItem, UserRecord } from "@/lib/dataStore/types";
 import type { PagesEnvironment } from "@/lib/pagesTypes";
+import type { MindMapsEnvironment } from "@/lib/mindMapTypes";
 import type { NewTask, Section, TaskItem } from "@/lib/types";
 import { DEFAULT_PAGES_ENVIRONMENT } from "@/lib/pagesTypes";
+import { DEFAULT_MIND_MAPS_ENVIRONMENT } from "@/lib/mindMapTypes";
 import { normalizeUrlsFromDoc } from "@/lib/taskUrls";
 import { subtreeNodesPreorder } from "@/lib/duplicateTaskTree";
 
@@ -37,6 +39,11 @@ export function buildSqliteDataStore(db: Database.Database): AppDataStore {
   const selPage = db.prepare("SELECT doc FROM pages_environment WHERE id = 'default'");
   const upsertPage = db.prepare(
     `INSERT INTO pages_environment (id, doc, updated_at) VALUES ('default', ?, ?)
+     ON CONFLICT(id) DO UPDATE SET doc = excluded.doc, updated_at = excluded.updated_at`
+  );
+  const selMindMaps = db.prepare("SELECT doc FROM mind_maps_environment WHERE id = 'default'");
+  const upsertMindMaps = db.prepare(
+    `INSERT INTO mind_maps_environment (id, doc, updated_at) VALUES ('default', ?, ?)
      ON CONFLICT(id) DO UPDATE SET doc = excluded.doc, updated_at = excluded.updated_at`
   );
   const insUser = db.prepare(
@@ -248,10 +255,21 @@ export function buildSqliteDataStore(db: Database.Database): AppDataStore {
       upsertPage.run(JSON.stringify(environment), new Date().toISOString());
     },
 
+    async getMindMapsEnvironment() {
+      const row = selMindMaps.get() as { doc: string } | undefined;
+      if (!row) return DEFAULT_MIND_MAPS_ENVIRONMENT;
+      return JSON.parse(row.doc) as MindMapsEnvironment;
+    },
+
+    async setMindMapsEnvironment(environment) {
+      upsertMindMaps.run(JSON.stringify(environment), new Date().toISOString());
+    },
+
     async backupExport() {
       const secRows = selSections.all() as { id: string; doc: string }[];
       const taskRows = selTasks.all() as { id: string; doc: string }[];
       const pageRow = selPage.get() as { doc: string } | undefined;
+      const mindMapsRow = selMindMaps.get() as { doc: string } | undefined;
       const stringify = (id: string, obj: Record<string, unknown>) => {
         const { _id, ...rest } = obj;
         return { ...rest, _id: id };
@@ -262,6 +280,7 @@ export function buildSqliteDataStore(db: Database.Database): AppDataStore {
         sections: secRows.map((r) => stringify(r.id, JSON.parse(r.doc) as Record<string, unknown>)),
         tasks: taskRows.map((r) => stringify(r.id, JSON.parse(r.doc) as Record<string, unknown>)),
         pagesEnvironment: pageRow ? JSON.parse(pageRow.doc) : null,
+        mindMapsEnvironment: mindMapsRow ? JSON.parse(mindMapsRow.doc) : null,
       } as BackupPayload;
     },
 
@@ -280,6 +299,9 @@ export function buildSqliteDataStore(db: Database.Database): AppDataStore {
       }
       if (body.pagesEnvironment != null) {
         upsertPage.run(JSON.stringify(body.pagesEnvironment), new Date().toISOString());
+      }
+      if ((body as Record<string, unknown>).mindMapsEnvironment != null) {
+        upsertMindMaps.run(JSON.stringify((body as Record<string, unknown>).mindMapsEnvironment), new Date().toISOString());
       }
     },
 
@@ -303,6 +325,7 @@ export function buildSqliteDataStore(db: Database.Database): AppDataStore {
       delAllSections.run();
       delAllTasks.run();
       upsertPage.run(JSON.stringify(DEFAULT_PAGES_ENVIRONMENT), new Date().toISOString());
+      upsertMindMaps.run(JSON.stringify(DEFAULT_MIND_MAPS_ENVIRONMENT), new Date().toISOString());
     },
 
     async findUserById(userId) {

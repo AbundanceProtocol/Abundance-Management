@@ -37,6 +37,7 @@ It is built with **Next.js** (App Router), **React**, and **TypeScript**. Data l
 
 - **JSON backup export** and **restore** (replace all sections, tasks, and optional pages environment)—from **Settings**.
 - **Reset application data** (danger zone): wipe tasks/sections/pages config while **keeping login accounts**; requires typing a confirmation phrase.
+- **Reset database connection** (danger zone, after DB setup): clears stored engine and connection settings, **keeps the auth secret** (from config or `AUTH_SECRET`), signs you out, and sends you to **`/setup`** to pick a **new** database and admin user. Data on the old database is not deleted remotely.
 
 ### Authentication & setup
 

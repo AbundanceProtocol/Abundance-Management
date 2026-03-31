@@ -10,6 +10,7 @@ type SessionAccount = {
   username: string | null;
   canChangeCredentials: boolean;
   needsReauthForCredentials: boolean;
+  databaseSetupComplete?: boolean;
 };
 
 interface Props {
@@ -39,6 +40,8 @@ export default function SettingsModal({ open, onClose, onImportComplete }: Props
   const [credOk, setCredOk] = useState<string | null>(null);
   const [resetConfirm, setResetConfirm] = useState("");
   const [resetting, setResetting] = useState(false);
+  const [resetDbConfirm, setResetDbConfirm] = useState("");
+  const [resettingDb, setResettingDb] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -228,6 +231,31 @@ export default function SettingsModal({ open, onClose, onImportComplete }: Props
       setResetting(false);
     }
   }, [resetConfirm, onImportComplete, onClose, router]);
+
+  const handleResetDatabaseConfiguration = useCallback(async () => {
+    setResettingDb(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/settings/reset-database-configuration", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: resetDbConfirm }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(typeof data.error === "string" ? data.error : "Reset failed");
+        return;
+      }
+      setResetDbConfirm("");
+      onClose();
+      router.replace("/setup");
+      router.refresh();
+    } catch {
+      setError("Network error");
+    } finally {
+      setResettingDb(false);
+    }
+  }, [resetDbConfirm, onClose, router]);
 
   if (!open) return null;
 
@@ -607,6 +635,65 @@ export default function SettingsModal({ open, onClose, onImportComplete }: Props
           >
             {resetting ? "Resetting…" : "Reset application data"}
           </button>
+
+          {account && account.databaseSetupComplete && !account.skipAuth ? (
+            <>
+              <div
+                style={{
+                  borderTop: "1px solid var(--border-color)",
+                  marginTop: 18,
+                  paddingTop: 18,
+                }}
+              />
+              <p
+                style={{
+                  margin: "0 0 10px",
+                  fontSize: 12,
+                  color: "var(--text-secondary)",
+                  lineHeight: 1.5,
+                }}
+              >
+                <strong>Reset database connection</strong> removes stored engine, connection URLs,
+                and setup completion. Your <strong>auth secret is kept</strong> (or use{" "}
+                <code>AUTH_SECRET</code> in the environment). You will be signed out and sent to
+                first-time setup to choose a <strong>new</strong> database and admin account. Old
+                data remains on the previous database server but this app will no longer use it.
+              </p>
+              <input
+                type="text"
+                value={resetDbConfirm}
+                onChange={(e) => setResetDbConfirm(e.target.value)}
+                placeholder="RESET_DATABASE_CONFIGURATION"
+                style={inputSm}
+                autoComplete="off"
+              />
+              <button
+                type="button"
+                onClick={handleResetDatabaseConfiguration}
+                disabled={
+                  resettingDb || resetDbConfirm !== "RESET_DATABASE_CONFIGURATION"
+                }
+                style={{
+                  marginTop: 10,
+                  width: "100%",
+                  padding: "10px 14px",
+                  borderRadius: 8,
+                  border: "1px solid var(--accent-red, #ef4444)",
+                  background: "rgba(239, 68, 68, 0.12)",
+                  color: "var(--accent-red, #ef4444)",
+                  fontWeight: 600,
+                  fontSize: 13,
+                  cursor: resettingDb ? "wait" : "pointer",
+                  opacity:
+                    resettingDb || resetDbConfirm !== "RESET_DATABASE_CONFIGURATION"
+                      ? 0.55
+                      : 1,
+                }}
+              >
+                {resettingDb ? "Working…" : "Reset database & run setup again"}
+              </button>
+            </>
+          ) : null}
         </div>
 
         {error && (

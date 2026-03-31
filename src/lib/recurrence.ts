@@ -93,9 +93,10 @@ export function filterTasksForMainView(
   tasks: TaskItem[],
   showCompleted: boolean
 ): TaskItem[] {
-  if (showCompleted) return tasks;
+  const visible = tasks.filter((t) => !t.mindMapOnly);
+  if (showCompleted) return visible;
   const byParent = new Map<string | null, TaskItem[]>();
-  for (const t of tasks) {
+  for (const t of visible) {
     const pid = t.parentId;
     if (!byParent.has(pid)) byParent.set(pid, []);
     byParent.get(pid)!.push(t);

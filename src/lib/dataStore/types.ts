@@ -1,4 +1,5 @@
 import type { PagesEnvironment } from "@/lib/pagesTypes";
+import type { MindMapsEnvironment } from "@/lib/mindMapTypes";
 import type { NewTask, Section, TaskItem } from "@/lib/types";
 
 export type ReorderItem = {
@@ -24,6 +25,7 @@ export type BackupPayload = {
   sections: Record<string, unknown>[];
   tasks: Record<string, unknown>[];
   pagesEnvironment: unknown | null;
+  mindMapsEnvironment: unknown | null;
 };
 
 export interface AppDataStore {
@@ -37,12 +39,15 @@ export interface AppDataStore {
   duplicateTaskSubtree(taskId: string): Promise<{ rootId: string; count: number }>;
   getPagesEnvironment(): Promise<PagesEnvironment>;
   setPagesEnvironment(env: PagesEnvironment): Promise<void>;
+  getMindMapsEnvironment(): Promise<MindMapsEnvironment>;
+  setMindMapsEnvironment(env: MindMapsEnvironment): Promise<void>;
   backupExport(): Promise<BackupPayload>;
   backupImport(body: {
     version: number;
     sections: Record<string, unknown>[];
     tasks: Record<string, unknown>[];
     pagesEnvironment?: unknown | null;
+    mindMapsEnvironment?: unknown | null;
   }): Promise<void>;
   createUser(input: {
     username: string;

@@ -28,15 +28,20 @@ import {
   ArrowDownRight,
   Lock,
   ZoomIn,
+  MindMap,
 } from "./Icons";
 import { getActiveTodayFocusYmd, msUntilNextTodayFocusReset } from "@/lib/todayFocus";
 import {
-  buildRecurringNotesPageBody,
-  parseRecurringNotesEntriesFromPageBody,
-  type RecurringNotesEntries,
-} from "@/lib/recurringNotesPage";
+  getOrCreateDayPage,
+  migrateLegacyHubBody,
+  pageBodyFromPlainText,
+  plainTextFromPageBody,
+  isValidYmd,
+} from "@/lib/recurringNotesPages";
 import { normalizeTaskWeight } from "@/lib/recurrence";
 import RecurringTaskNotesModal from "./RecurringTaskNotesModal";
+import { buildMindMapFromTasks, importTaskSubtasksIntoMap } from "./MindMapsView";
+import type { MindMapDocument } from "@/lib/mindMapTypes";
 
 interface Props {
   task: TaskItem;
@@ -112,10 +117,6 @@ export default function TaskDetailPanel({
     task.recurringNotesPageId ?? null
   );
   const [recurringNotesModalOpen, setRecurringNotesModalOpen] = useState(false);
-  const [recurringNotesEntries, setRecurringNotesEntries] = useState<RecurringNotesEntries>(
-    {}
-  );
-  const recurringNotesEntriesRef = useRef<RecurringNotesEntries>({});
   const [recurringNotesModalDate, setRecurringNotesModalDate] = useState(
     getActiveTodayFocusYmd()
   );
@@ -145,6 +146,14 @@ export default function TaskDetailPanel({
   const [createSubtaskBusy, setCreateSubtaskBusy] = useState(false);
   const [attachBusy, setAttachBusy] = useState(false);
   const [creatingLinkedPage, setCreatingLinkedPage] = useState(false);
+  const [mindMapSubtaskImportBusy, setMindMapSubtaskImportBusy] = useState(false);
+  const [mindMapSubtaskImportNote, setMindMapSubtaskImportNote] = useState<
+    string | null
+  >(null);
+
+  useEffect(() => {
+    setMindMapSubtaskImportNote(null);
+  }, [task._id]);
 
   const sectionTasks = useMemo(
     () => (tasks ?? []).filter((t) => t.sectionId === task.sectionId),
@@ -161,6 +170,17 @@ export default function TaskDetailPanel({
     () => flattenTasksTree(sectionTasks, sectionTopSort),
     [sectionTasks, sectionTopSort]
   );
+
+  /** Direct subtasks in loaded task data (can disagree with board-only `directChildCount`). */
+  const taskDirectSubtaskCount = useMemo(
+    () => (tasks ?? []).filter((t) => t.parentId === task._id).length,
+    [tasks, task._id]
+  );
+
+  const showMindMapSection =
+    Boolean(task.mindMapId) ||
+    directChildCount > 0 ||
+    taskDirectSubtaskCount > 0;
 
   const validParentOptions = useMemo(() => {
     if (!tasks || !section) return [];
@@ -312,10 +332,6 @@ export default function TaskDetailPanel({
   }, [pages]);
 
   useEffect(() => {
-    recurringNotesEntriesRef.current = recurringNotesEntries;
-  }, [recurringNotesEntries]);
-
-  useEffect(() => {
     recurringNotesModalDateRef.current = recurringNotesModalDate;
   }, [recurringNotesModalDate]);
 
@@ -385,12 +401,6 @@ export default function TaskDetailPanel({
   const ensureRecurringNotesPage = useCallback(async (): Promise<MarkdownPageItem | null> => {
     if (!section || section.type !== "recurring") return null;
 
-    const candidateId = recurringNotesPageId ?? task.recurringNotesPageId ?? null;
-    if (candidateId) {
-      const hit = pagesRef.current.find((p) => p.id === candidateId) ?? null;
-      if (hit) return hit;
-    }
-
     if (ensureRecurringNotesPagePromiseRef.current) {
       return ensureRecurringNotesPagePromiseRef.current;
     }
@@ -407,6 +417,7 @@ export default function TaskDetailPanel({
           const hit = items.find((p) => p.id === recheckId) ?? null;
           if (hit) {
             setRecurringNotesPageId(hit.id);
+            setPages(items);
             return hit;
           }
         }
@@ -420,7 +431,7 @@ export default function TaskDetailPanel({
         const page: MarkdownPageItem = {
           id: newPageId,
           title: "Daily notes",
-          body: buildRecurringNotesPageBody({}),
+          body: serializePageDocument(emptyPageDocument()),
           linkedTaskId: task._id,
           parentId: null,
           depth: 0,
@@ -450,38 +461,64 @@ export default function TaskDetailPanel({
 
     ensureRecurringNotesPagePromiseRef.current = job;
     return job;
-  }, [
-    section,
-    recurringNotesPageId,
-    task.recurringNotesPageId,
-    task._id,
-    pagesRef,
-    persistPartial,
-    buildRecurringNotesPageBody,
-  ]);
+  }, [section, recurringNotesPageId, task.recurringNotesPageId, task._id, persistPartial]);
 
   const openRecurringNotesModal = useCallback(async () => {
-    const page = await ensureRecurringNotesPage();
-    if (!page) return;
+    const hub = await ensureRecurringNotesPage();
+    if (!hub) return;
 
-    const entries = parseRecurringNotesEntriesFromPageBody(page.body);
+    const res = await fetch("/api/pages");
+    const data = (await res.json()) as PagesEnvironment;
+    let items = data?.items ?? [];
+
+    const migrated = migrateLegacyHubBody(items, hub.id, task._id);
+    items = migrated.items;
+    if (migrated.migrated) {
+      await fetch("/api/pages", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+    }
+
+    const hubItem = items.find((p) => p.id === hub.id);
+    if (!hubItem) return;
+
     const ymd = activeTodayFocusYmd;
+    const { items: withDay, dayPageId } = getOrCreateDayPage(
+      items,
+      hubItem,
+      task._id,
+      ymd
+    );
+    if (withDay.length > items.length) {
+      await fetch("/api/pages", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: withDay }),
+      });
+      items = withDay;
+    } else {
+      items = withDay;
+    }
 
-    setRecurringNotesEntries(entries);
-    recurringNotesEntriesRef.current = entries;
-    setRecurringNotesPageId(page.id);
+    const dayPage = items.find((p) => p.id === dayPageId);
+    if (!dayPage) return;
+
+    setPages(items);
+    setRecurringNotesPageId(hub.id);
     setRecurringNotesModalDate(ymd);
-    setRecurringNotesModalText(entries[ymd] ?? "");
+    setRecurringNotesModalText(plainTextFromPageBody(dayPage.body));
     recurringNotesDirtyRef.current = false;
     setRecurringNotesModalOpen(true);
-  }, [ensureRecurringNotesPage, activeTodayFocusYmd]);
+  }, [ensureRecurringNotesPage, activeTodayFocusYmd, task._id]);
 
   const persistRecurringNotesNow = useCallback(async (): Promise<void> => {
     if (!section || section.type !== "recurring") return;
     if (!recurringNotesDirtyRef.current) return;
 
-    const pageId = recurringNotesPageId ?? task.recurringNotesPageId ?? null;
-    if (!pageId) return;
+    const hubId = recurringNotesPageId ?? task.recurringNotesPageId ?? null;
+    if (!hubId) return;
 
     if (persistRecurringNotesPromiseRef.current) {
       persistRecurringNotesNeedsAnotherRef.current = true;
@@ -497,31 +534,47 @@ export default function TaskDetailPanel({
 
           const dateAtWrite = recurringNotesModalDateRef.current;
           const textAtWrite = recurringNotesModalTextRef.current;
-          const nextEntries: RecurringNotesEntries = {
-            ...recurringNotesEntriesRef.current,
-          };
 
-          const trimmed = textAtWrite.trim();
-          if (!/^\d{4}-\d{2}-\d{2}$/.test(dateAtWrite)) {
-            // Unexpected; don't write anything.
+          if (!isValidYmd(dateAtWrite)) {
             return;
           }
 
-          if (trimmed.length === 0) {
-            delete nextEntries[dateAtWrite];
-          } else {
-            nextEntries[dateAtWrite] = textAtWrite;
+          const res = await fetch("/api/pages");
+          const data = (await res.json()) as PagesEnvironment;
+          let items = data?.items ?? [];
+
+          let migrated = migrateLegacyHubBody(items, hubId, task._id);
+          items = migrated.items;
+          if (migrated.migrated) {
+            await fetch("/api/pages", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ items }),
+            });
           }
 
-          const nextBody = buildRecurringNotesPageBody(nextEntries);
-          const nextItems = pagesRef.current.map((p) =>
-            p.id === pageId ? { ...p, body: nextBody } : p
+          const hub = items.find((p) => p.id === hubId);
+          if (!hub) return;
+
+          const { items: withDay, dayPageId } = getOrCreateDayPage(
+            items,
+            hub,
+            task._id,
+            dateAtWrite
+          );
+          items = withDay;
+
+          const trimmed = textAtWrite.trim();
+          const nextBody =
+            trimmed.length === 0
+              ? serializePageDocument(emptyPageDocument())
+              : pageBodyFromPlainText(textAtWrite);
+
+          const nextItems = items.map((p) =>
+            p.id === dayPageId ? { ...p, body: nextBody } : p
           );
 
-          // Optimistic local update
           setPages(nextItems);
-          setRecurringNotesEntries(nextEntries);
-          recurringNotesEntriesRef.current = nextEntries;
 
           await fetch("/api/pages", {
             method: "PUT",
@@ -554,22 +607,63 @@ export default function TaskDetailPanel({
 
     persistRecurringNotesPromiseRef.current = job;
     return job;
-  }, [
-    section,
-    recurringNotesPageId,
-    task.recurringNotesPageId,
-    persistRecurringNotesPromiseRef,
-    pagesRef,
-    buildRecurringNotesPageBody,
-  ]);
+  }, [section, recurringNotesPageId, task.recurringNotesPageId, task._id]);
 
-  const handleRecurringNotesDateChange = useCallback((next: string) => {
-    const safe = next.trim();
-    setRecurringNotesModalDate(safe);
-    recurringNotesDirtyRef.current = false;
-    const entries = recurringNotesEntriesRef.current;
-    setRecurringNotesModalText(entries[safe] ?? "");
-  }, []);
+  const handleRecurringNotesDateChange = useCallback(
+    (next: string) => {
+      const safe = next.trim();
+      if (!isValidYmd(safe)) return;
+
+      void (async () => {
+        if (recurringNotesDirtyRef.current) {
+          await persistRecurringNotesNow();
+        }
+        const hubId = recurringNotesPageId ?? task.recurringNotesPageId ?? null;
+        if (!hubId) return;
+
+        const res = await fetch("/api/pages");
+        const data = (await res.json()) as PagesEnvironment;
+        let items = data?.items ?? [];
+
+        const migrated = migrateLegacyHubBody(items, hubId, task._id);
+        items = migrated.items;
+        if (migrated.migrated) {
+          await fetch("/api/pages", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items }),
+          });
+        }
+
+        const hubItem = items.find((p) => p.id === hubId);
+        if (!hubItem) return;
+
+        const { items: withDay, dayPageId } = getOrCreateDayPage(
+          items,
+          hubItem,
+          task._id,
+          safe
+        );
+        if (withDay.length > items.length) {
+          await fetch("/api/pages", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: withDay }),
+          });
+        }
+        items = withDay;
+
+        const dayPage = items.find((p) => p.id === dayPageId);
+        if (!dayPage) return;
+
+        setPages(items);
+        setRecurringNotesModalDate(safe);
+        setRecurringNotesModalText(plainTextFromPageBody(dayPage.body));
+        recurringNotesDirtyRef.current = false;
+      })();
+    },
+    [recurringNotesPageId, task.recurringNotesPageId, task._id, persistRecurringNotesNow]
+  );
 
   const handleRecurringNotesTextChange = useCallback((next: string) => {
     recurringNotesDirtyRef.current = true;
@@ -1761,6 +1855,200 @@ export default function TaskDetailPanel({
           </div>
         )}
 
+        {/* Mind map toggle */}
+        {showMindMapSection && (
+          <div style={{ padding: "8px 0" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 13,
+                  color: "var(--text-secondary)",
+                }}
+              >
+                <span
+                  style={{
+                    display: "flex",
+                    color: task.mindMapId
+                      ? "var(--accent-purple)"
+                      : "var(--text-secondary)",
+                  }}
+                >
+                  <MindMap size={14} />
+                </span>
+                Mind map
+              </label>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (task.mindMapId) {
+                    persistPartial({ mindMapId: null });
+                  } else {
+                    const allTasks = tasks ?? [];
+                    const mapNodes = buildMindMapFromTasks(task._id, allTasks);
+                    const id =
+                      typeof crypto !== "undefined" && crypto.randomUUID
+                        ? crypto.randomUUID()
+                        : Math.random().toString(36).slice(2) + Date.now().toString(36);
+                    const mapDoc: MindMapDocument = {
+                      id,
+                      title: (task.title || "Untitled") + " \u2014 Mind Map",
+                      rootNodeId: mapNodes[0]?.id ?? null,
+                      anchorTaskId: task._id,
+                      nodes: mapNodes,
+                      updatedAt: new Date().toISOString(),
+                    };
+                    await fetch("/api/mind-maps").then(async (r) => {
+                      const env = await r.json();
+                      const nextMaps = [...(env?.maps ?? []), mapDoc];
+                      await fetch("/api/mind-maps", {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ maps: nextMaps }),
+                      });
+                    });
+                    persistPartial({ mindMapId: id });
+                  }
+                }}
+                style={{
+                  width: 36,
+                  height: 20,
+                  borderRadius: 10,
+                  background: task.mindMapId
+                    ? "var(--accent-purple)"
+                    : "var(--bg-tertiary)",
+                  border: "1px solid var(--border-color)",
+                  position: "relative",
+                  transition: "background 0.2s",
+                  padding: 0,
+                  cursor: "pointer",
+                }}
+              >
+                <span
+                  style={{
+                    position: "absolute",
+                    top: 2,
+                    left: task.mindMapId ? 18 : 2,
+                    width: 14,
+                    height: 14,
+                    borderRadius: "50%",
+                    background: "white",
+                    transition: "left 0.2s",
+                  }}
+                />
+              </button>
+            </div>
+            {task.mindMapId && (
+              <a
+                href={`/mind-maps?mapId=${encodeURIComponent(task.mindMapId)}`}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 12,
+                  color: "var(--accent-purple)",
+                  marginTop: 6,
+                  textDecoration: "none",
+                }}
+              >
+                <MindMap size={12} /> Open mind map
+              </a>
+            )}
+            {task.mindMapId && taskDirectSubtaskCount > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  disabled={mindMapSubtaskImportBusy}
+                  onClick={async () => {
+                    setMindMapSubtaskImportNote(null);
+                    const all = tasks ?? [];
+                    setMindMapSubtaskImportBusy(true);
+                    try {
+                      const res = await fetch("/api/mind-maps");
+                      const env = (await res.json()) as { maps?: MindMapDocument[] };
+                      const mapList = env?.maps ?? [];
+                      const map = mapList.find((m) => m.id === task.mindMapId);
+                      if (!map) {
+                        setMindMapSubtaskImportNote("Mind map not found.");
+                        return;
+                      }
+                      const next = importTaskSubtasksIntoMap(task._id, map, all);
+                      if (!next) {
+                        setMindMapSubtaskImportNote(
+                          "Add this task to the map first (link it on a task node).",
+                        );
+                        return;
+                      }
+                      if (next === map) {
+                        setMindMapSubtaskImportNote(
+                          "All subtasks are already on the map.",
+                        );
+                        return;
+                      }
+                      const nextMaps = mapList.map((m) =>
+                        m.id === next.id ? next : m,
+                      );
+                      await fetch("/api/mind-maps", {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ maps: nextMaps }),
+                      });
+                      setMindMapSubtaskImportNote("Subtasks imported.");
+                    } catch {
+                      setMindMapSubtaskImportNote("Could not update mind map.");
+                    } finally {
+                      setMindMapSubtaskImportBusy(false);
+                    }
+                  }}
+                  style={{
+                    fontSize: 12,
+                    padding: "6px 10px",
+                    borderRadius: 6,
+                    border: "1px solid var(--border-color)",
+                    background: "var(--bg-tertiary)",
+                    color: "var(--text-primary)",
+                    cursor: mindMapSubtaskImportBusy ? "wait" : "pointer",
+                    opacity: mindMapSubtaskImportBusy ? 0.7 : 1,
+                  }}
+                >
+                  Import subtasks into map
+                </button>
+                {mindMapSubtaskImportNote && (
+                  <p
+                    style={{
+                      fontSize: 11,
+                      color: "var(--text-muted)",
+                      margin: "6px 0 0",
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    {mindMapSubtaskImportNote}
+                  </p>
+                )}
+              </div>
+            )}
+            <p
+              style={{
+                fontSize: 11,
+                color: "var(--text-muted)",
+                margin: "6px 0 0",
+                lineHeight: 1.4,
+              }}
+            >
+              Generate a mind map from this task and its subtasks. Toggle off to
+              unlink (the map stays in the Mind Maps library).
+            </p>
+          </div>
+        )}
+
         {/* Notes */}
         <div>
           <label
@@ -1829,7 +2117,8 @@ export default function TaskDetailPanel({
                   void (async () => {
                     const page = await ensureRecurringNotesPage();
                     if (!page) return;
-                    window.location.href = `/pages?pageId=${encodeURIComponent(page.id)}&taskId=${encodeURIComponent(task._id)}`;
+                    const ymd = getActiveTodayFocusYmd();
+                    window.location.href = `/pages?pageId=${encodeURIComponent(page.id)}&taskId=${encodeURIComponent(task._id)}&date=${encodeURIComponent(ymd)}`;
                   })();
                 }}
                 style={{
@@ -1842,13 +2131,13 @@ export default function TaskDetailPanel({
                   fontWeight: 600,
                   cursor: "pointer",
                 }}
-                title="Open the daily notes page"
+                title="Open the daily notes hub (list by date)"
               >
                 Open notes page
               </button>
             </div>
             <p style={{ margin: 0, fontSize: 11, color: "var(--text-muted)", lineHeight: 1.4 }}>
-              Use this modal to store a note for each date. The notes page will update automatically.
+              Each date has its own page. The hub lists all days; this modal edits one date at a time.
             </p>
           </div>
         )}
@@ -1859,6 +2148,8 @@ export default function TaskDetailPanel({
           dateYmd={recurringNotesModalDate}
           noteText={recurringNotesModalText}
           saving={recurringNotesSaving}
+          timeEstimate={task.timeEstimate}
+          timeUnit={task.timeUnit}
           onDateChange={handleRecurringNotesDateChange}
           onTextChange={handleRecurringNotesTextChange}
           onClose={() => void closeRecurringNotesModal()}

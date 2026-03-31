@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Section, TaskItem, NewTask, TimeUnit, TaskPriority, SectionType } from "./types";
+import type { MindMapsEnvironment, MindMapDocument } from "./mindMapTypes";
 
 export function useSections() {
   const [sections, setSections] = useState<Section[]>([]);
@@ -264,4 +265,53 @@ export function useTasks() {
     duplicateTaskWithSubtree,
     refetch: fetchTasks,
   };
+}
+
+export function useMindMaps() {
+  const [maps, setMaps] = useState<MindMapDocument[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchMaps = useCallback(async () => {
+    try {
+      const res = await fetch("/api/mind-maps");
+      const data = (await res.json()) as MindMapsEnvironment;
+      setMaps(data.maps ?? []);
+    } catch (err) {
+      console.error("Failed to fetch mind maps:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchMaps();
+  }, [fetchMaps]);
+
+  const persist = useCallback(async (next: MindMapDocument[]) => {
+    setMaps(next);
+    await fetch("/api/mind-maps", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ maps: next }),
+    });
+  }, []);
+
+  const upsertMap = useCallback(
+    async (map: MindMapDocument) => {
+      const next = maps.some((m) => m.id === map.id)
+        ? maps.map((m) => (m.id === map.id ? map : m))
+        : [...maps, map];
+      await persist(next);
+    },
+    [maps, persist]
+  );
+
+  const deleteMap = useCallback(
+    async (mapId: string) => {
+      await persist(maps.filter((m) => m.id !== mapId));
+    },
+    [maps, persist]
+  );
+
+  return { maps, loading, upsertMap, deleteMap, refetch: fetchMaps };
 }

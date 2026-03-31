@@ -124,6 +124,34 @@ export function Clock({ size = 16, className = "" }: IconProps) {
   );
 }
 
+/** Play / start */
+export function Play({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" className={className}>
+      <path d="M4.5 3.5l8 4.5-8 4.5V3.5z" />
+    </svg>
+  );
+}
+
+/** Pause */
+export function Pause({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <rect x="4" y="3.5" width="3" height="9" rx="0.5" fill="currentColor" />
+      <rect x="9" y="3.5" width="3" height="9" rx="0.5" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** Stop / reset (square) */
+export function Square({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <rect x="4" y="4" width="8" height="8" rx="1" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function Flag({ size = 16, className = "" }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
@@ -331,6 +359,31 @@ export function Upload({ size = 16, className = "" }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
       <path d="M8 10V2m0 0L5 5m3-3l3 3M3 12h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** Clipboard with lines — task list */
+export function ClipboardList({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <rect x="3" y="2.5" width="10" height="12" rx="1.5" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M6 2v1.5a.5.5 0 00.5.5h3a.5.5 0 00.5-.5V2" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M5.5 7h5M5.5 9.5h5M5.5 12h3" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Mind map / network graph icon */
+export function MindMap({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <circle cx="8" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.2" />
+      <circle cx="3" cy="3.5" r="1.5" stroke="currentColor" strokeWidth="1" />
+      <circle cx="13" cy="3.5" r="1.5" stroke="currentColor" strokeWidth="1" />
+      <circle cx="3" cy="12.5" r="1.5" stroke="currentColor" strokeWidth="1" />
+      <circle cx="13" cy="12.5" r="1.5" stroke="currentColor" strokeWidth="1" />
+      <path d="M6 6.5L4.2 4.7M10 6.5l1.8-1.8M6 9.5L4.2 11.3M10 9.5l1.8 1.8" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
     </svg>
   );
 }

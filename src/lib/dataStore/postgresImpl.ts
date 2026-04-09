@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import type { Pool } from "pg";
-import type { AppDataStore, BackupPayload, ReorderItem, UserRecord } from "@/lib/dataStore/types";
+import type { AppDataStore, BackupPayload, GoogleOAuthToken, ReorderItem, UserRecord } from "@/lib/dataStore/types";
 import type { PagesEnvironment } from "@/lib/pagesTypes";
 import type { MindMapsEnvironment } from "@/lib/mindMapTypes";
 import type { NewTask, Section, TaskItem } from "@/lib/types";
@@ -482,6 +482,47 @@ export function buildPostgresDataStore(pool: Pool): AppDataStore {
       if (new Date(row.expires_at) < new Date()) return null;
       await pool.query("DELETE FROM password_reset_tokens WHERE token_hash = $1", [tokenHash]);
       return { userId: row.user_id };
+    },
+
+    async getGoogleOAuthToken(userId) {
+      const { rows } = await pool.query<{ doc: unknown }>(
+        "SELECT doc FROM google_oauth_tokens WHERE user_id = $1",
+        [userId]
+      );
+      if (!rows[0]) return null;
+      return parseDoc<GoogleOAuthToken>(rows[0].doc);
+    },
+
+    async saveGoogleOAuthToken(token) {
+      await pool.query(
+        `INSERT INTO google_oauth_tokens (user_id, doc) VALUES ($1, $2::jsonb)
+         ON CONFLICT (user_id) DO UPDATE SET doc = EXCLUDED.doc`,
+        [token.userId, JSON.stringify(token)]
+      );
+    },
+
+    async deleteGoogleOAuthToken(userId) {
+      await pool.query("DELETE FROM google_oauth_tokens WHERE user_id = $1", [userId]);
+    },
+
+    async clearGoogleCalendarFieldsOnAllTasks() {
+      const { rows } = await pool.query<{ id: string; doc: unknown }>("SELECT id, doc FROM tasks");
+      for (const row of rows) {
+        const task = parseDoc<TaskItem>(row.doc);
+        if (task.googleCalendarEventId || task.googleCalendarSyncStatus) {
+          const updated = {
+            ...task,
+            googleCalendarEventId: null,
+            googleCalendarSyncedAt: null,
+            googleCalendarSyncStatus: null,
+            updatedAt: new Date().toISOString(),
+          };
+          await pool.query("UPDATE tasks SET doc = $1::jsonb WHERE id = $2", [
+            JSON.stringify(updated),
+            row.id,
+          ]);
+        }
+      }
     },
   };
 }

@@ -1,5 +1,5 @@
 import { MongoClient, Db, ObjectId } from "mongodb";
-import type { AppDataStore, BackupPayload, ReorderItem, UserRecord } from "@/lib/dataStore/types";
+import type { AppDataStore, BackupPayload, GoogleOAuthToken, ReorderItem, UserRecord } from "@/lib/dataStore/types";
 import type { PagesEnvironment } from "@/lib/pagesTypes";
 import type { MindMapsEnvironment } from "@/lib/mindMapTypes";
 import type { NewTask, Section, TaskItem } from "@/lib/types";
@@ -336,6 +336,39 @@ export async function createMongoStore(): Promise<AppDataStore> {
       if (new Date(doc.expiresAt) < new Date()) return null;
       await database.collection("password_reset_tokens").deleteMany({ tokenHash });
       return { userId: doc.userId };
+    },
+
+    async getGoogleOAuthToken(userId) {
+      const doc = await database
+        .collection<GoogleOAuthToken>("google_oauth_tokens")
+        .findOne({ userId });
+      if (!doc) return null;
+      const { _id: _, ...rest } = doc as GoogleOAuthToken & { _id: unknown };
+      return rest as GoogleOAuthToken;
+    },
+
+    async saveGoogleOAuthToken(token) {
+      await database
+        .collection("google_oauth_tokens")
+        .updateOne({ userId: token.userId }, { $set: token }, { upsert: true });
+    },
+
+    async deleteGoogleOAuthToken(userId) {
+      await database.collection("google_oauth_tokens").deleteOne({ userId });
+    },
+
+    async clearGoogleCalendarFieldsOnAllTasks() {
+      await database.collection("tasks").updateMany(
+        { googleCalendarEventId: { $exists: true } },
+        {
+          $set: {
+            googleCalendarEventId: null,
+            googleCalendarSyncedAt: null,
+            googleCalendarSyncStatus: null,
+            updatedAt: new Date().toISOString(),
+          },
+        }
+      );
     },
 
     async resetApplicationData() {

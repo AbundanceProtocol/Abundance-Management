@@ -23,6 +23,7 @@ import TaskRow from "./TaskRow";
 import TaskDetailPanel from "./TaskDetailPanel";
 import DeleteTaskConfirmModal from "./DeleteTaskConfirmModal";
 import CriticalPathTimeline from "./CriticalPathTimeline";
+import TasksCalendarView from "./TasksCalendarView";
 import { AppNavTasksPages } from "./AppNavTasksPages";
 import TaskViewNav from "./TaskViewNav";
 import SegmentedBooleanToggle from "./SegmentedBooleanToggle";
@@ -67,7 +68,8 @@ import {
   type TasksViewFilter,
 } from "@/lib/tasksViewFilter";
 
-const SHOW_CRITICAL_PATH_STORAGE_KEY = "abundance-show-critical-path";
+const SHOW_CRITICAL_PATH_STORAGE_KEY = "abundance-show-critical-path"; // legacy migration source
+const BOARD_VIZ_MODE_STORAGE_KEY = "abundance-board-viz-mode";
 const BOARD_TAB_STORAGE_KEY = "abundance-board-tab";
 const SHOW_COMPLETED_MAIN_STORAGE_KEY = "abundance-show-completed-main";
 const SHOW_TODAY_FOCUS_ONLY_STORAGE_KEY =
@@ -120,14 +122,19 @@ function readShowCompletedMain(): boolean {
   }
 }
 
-function readShowCriticalPath(): boolean {
-  if (typeof window === "undefined") return true;
+type VizMode = "graph" | "calendar" | "none";
+
+function readVizMode(): VizMode {
+  if (typeof window === "undefined") return "graph";
   try {
-    const v = localStorage.getItem(SHOW_CRITICAL_PATH_STORAGE_KEY);
-    if (v === null) return true;
-    return v === "1" || v === "true";
+    const v = localStorage.getItem(BOARD_VIZ_MODE_STORAGE_KEY);
+    if (v === "graph" || v === "calendar" || v === "none") return v;
+    // Migrate from old boolean critical-path key
+    const legacy = localStorage.getItem(SHOW_CRITICAL_PATH_STORAGE_KEY);
+    if (legacy !== null) return legacy === "1" || legacy === "true" ? "graph" : "none";
+    return "graph";
   } catch {
-    return true;
+    return "graph";
   }
 }
 
@@ -187,7 +194,7 @@ export default function GTDBoard() {
   const [showCompletedOnMain, setShowCompletedOnMain] = useState(
     readShowCompletedMain
   );
-  const [showCriticalPath, setShowCriticalPath] = useState(readShowCriticalPath);
+  const [vizMode, setVizMode] = useState<VizMode>(readVizMode);
   const [activeTodayFocusYmd, setActiveTodayFocusYmd] = useState(
     getActiveTodayFocusYmd()
   );
@@ -252,14 +259,11 @@ export default function GTDBoard() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(
-        SHOW_CRITICAL_PATH_STORAGE_KEY,
-        showCriticalPath ? "1" : "0"
-      );
+      localStorage.setItem(BOARD_VIZ_MODE_STORAGE_KEY, vizMode);
     } catch {
       /* ignore quota / private mode */
     }
-  }, [showCriticalPath]);
+  }, [vizMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -829,14 +833,59 @@ export default function GTDBoard() {
                 compact={viewportNarrow}
               />
             )}
-            {projectSectionsVisible.length > 0 && boardTab === "board" && (
-              <SegmentedBooleanToggle
-                label="Graph"
-                value={showCriticalPath}
-                onChange={setShowCriticalPath}
-                title="Critical path graph"
-                compact={viewportNarrow}
-              />
+            {boardTab === "board" && (
+              <div
+                style={{
+                  display: "flex",
+                  borderRadius: 8,
+                  border: "1px solid var(--border-color)",
+                  overflow: "hidden",
+                }}
+              >
+                {(
+                  [
+                    {
+                      mode: "graph" as const,
+                      label: "Graph",
+                      title: projectSectionsVisible.length === 0
+                        ? "Graph requires a project section"
+                        : "Critical path graph",
+                      disabled: projectSectionsVisible.length === 0,
+                    },
+                    { mode: "calendar" as const, label: "Calendar", title: "Calendar of due dates" },
+                    { mode: "none" as const, label: "None", title: "Hide visualization" },
+                  ] as const
+                ).map((opt, i) => (
+                  <button
+                    key={opt.mode}
+                    type="button"
+                    disabled={"disabled" in opt ? opt.disabled : false}
+                    onClick={() => setVizMode(opt.mode)}
+                    aria-pressed={vizMode === opt.mode}
+                    title={opt.title}
+                    style={{
+                      ...(viewportNarrow
+                        ? MOBILE_MENU_BUTTON
+                        : { fontSize: 13, padding: "6px 12px" }),
+                      border: "none",
+                      borderLeft: i > 0 ? "1px solid var(--border-color)" : "none",
+                      ...("disabled" in opt && opt.disabled
+                        ? {
+                            background: "transparent",
+                            color: "var(--text-muted)",
+                            fontWeight: 500,
+                            cursor: "not-allowed" as const,
+                            opacity: 0.45,
+                          }
+                        : vizMode === opt.mode
+                          ? SEGMENTED_ACTIVE
+                          : SEGMENTED_INACTIVE),
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
             )}
             <button
               type="button"
@@ -862,8 +911,8 @@ export default function GTDBoard() {
         </header>
 
         {boardTab === "board" &&
+          vizMode === "graph" &&
           projectSectionsVisible.length > 0 &&
-          showCriticalPath &&
           projectSectionsVisible.map((sec) => (
             <CriticalPathTimeline
               key={sec._id}
@@ -875,13 +924,22 @@ export default function GTDBoard() {
             />
           ))}
 
+        {boardTab === "board" && vizMode === "calendar" && (
+          <TasksCalendarView
+            tasks={tasks}
+            sections={sections}
+            onSelectTask={setSelectedTaskId}
+            selectedTaskId={selectedTaskId}
+          />
+        )}
+
         {boardTab === "board" &&
-          projectSectionsVisible.length > 0 &&
-          !showCriticalPath && (
+          vizMode === "none" &&
+          projectSectionsVisible.length > 0 && (
           <div style={{ margin: "0 24px 12px" }}>
             <button
               type="button"
-              onClick={() => setShowCriticalPath(true)}
+              onClick={() => setVizMode("graph")}
               style={{
                 fontSize: 12,
                 padding: "6px 10px",

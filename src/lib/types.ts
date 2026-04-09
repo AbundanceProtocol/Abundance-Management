@@ -84,6 +84,12 @@ export interface TaskItem {
    * (which resets daily at 2:00am local time).
    */
   todayFocusDate?: string | null;
+  /** Google Calendar event ID when this task has been pushed to GCal. */
+  googleCalendarEventId?: string | null;
+  /** ISO timestamp of the last successful GCal push. */
+  googleCalendarSyncedAt?: string | null;
+  /** Sync state: synced | pending | error — absent means never synced. */
+  googleCalendarSyncStatus?: "synced" | "pending" | "error" | null;
   createdAt: string;
   updatedAt: string;
 }

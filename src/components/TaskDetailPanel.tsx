@@ -150,9 +150,12 @@ export default function TaskDetailPanel({
   const [mindMapSubtaskImportNote, setMindMapSubtaskImportNote] = useState<
     string | null
   >(null);
+  const [gcalSyncing, setGcalSyncing] = useState(false);
+  const [gcalSyncMsg, setGcalSyncMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
     setMindMapSubtaskImportNote(null);
+    setGcalSyncMsg(null);
   }, [task._id]);
 
   const sectionTasks = useMemo(
@@ -218,6 +221,24 @@ export default function TaskDetailPanel({
     },
     [onUpdate, task._id]
   );
+
+  const handleGcalSync = useCallback(async () => {
+    setGcalSyncing(true);
+    setGcalSyncMsg(null);
+    try {
+      const res = await fetch(`/api/google-calendar/sync/task/${task._id}`, { method: "POST" });
+      if (res.ok) {
+        setGcalSyncMsg({ ok: true, text: "Pushed to Google Calendar." });
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setGcalSyncMsg({ ok: false, text: typeof data.error === "string" ? data.error : "Sync failed." });
+      }
+    } catch {
+      setGcalSyncMsg({ ok: false, text: "Network error." });
+    } finally {
+      setGcalSyncing(false);
+    }
+  }, [task._id]);
 
   const handleParentSelect = useCallback(
     (newParentId: string | null) => {
@@ -1241,6 +1262,47 @@ export default function TaskDetailPanel({
             </p>
           )}
         </div>
+
+        {/* Google Calendar manual sync — non-recurring tasks with a due date */}
+        {dueDate && repeatFrequency === "none" && (
+          <div>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 }}>
+              <Calendar size={14} /> Google Calendar
+            </label>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button
+                type="button"
+                onClick={handleGcalSync}
+                disabled={gcalSyncing}
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: 6,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-secondary)",
+                  color: "var(--text-primary)",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  cursor: gcalSyncing ? "wait" : "pointer",
+                  opacity: gcalSyncing ? 0.6 : 1,
+                  flexShrink: 0,
+                }}
+              >
+                {gcalSyncing ? "Pushing…" : "Push to Calendar"}
+              </button>
+              {!gcalSyncMsg && task.googleCalendarSyncStatus === "synced" && (
+                <span style={{ fontSize: 11, color: "var(--accent-green, #22c55e)" }}>Synced</span>
+              )}
+              {!gcalSyncMsg && task.googleCalendarSyncStatus === "error" && (
+                <span style={{ fontSize: 11, color: "var(--accent-red, #ef4444)" }}>Last sync failed</span>
+              )}
+              {gcalSyncMsg && (
+                <span style={{ fontSize: 11, color: gcalSyncMsg.ok ? "var(--accent-green, #22c55e)" : "var(--accent-red, #ef4444)" }}>
+                  {gcalSyncMsg.text}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
 
         {section?.type === "recurring" && (
           <div>

@@ -19,6 +19,15 @@ export type UserRecord = {
   createdAt: string;
 };
 
+export type GoogleOAuthToken = {
+  userId: string;
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: string;   // ISO timestamp
+  calendarId: string;  // "primary" or specific calendar ID
+  connectedAt: string; // ISO timestamp
+};
+
 export type BackupPayload = {
   version: number;
   exportedAt: string;
@@ -65,6 +74,11 @@ export interface AppDataStore {
   ): Promise<void>;
   /** Deletes all sections and tasks and restores default pages environment. Does not remove users. */
   resetApplicationData(): Promise<void>;
+  getGoogleOAuthToken(userId: string): Promise<GoogleOAuthToken | null>;
+  saveGoogleOAuthToken(token: GoogleOAuthToken): Promise<void>;
+  deleteGoogleOAuthToken(userId: string): Promise<void>;
+  /** Clear googleCalendarEventId / syncStatus on all tasks (used on disconnect). */
+  clearGoogleCalendarFieldsOnAllTasks(): Promise<void>;
   savePasswordResetToken(input: {
     id: string;
     userId: string;

@@ -12,6 +12,8 @@ export type AppConfigFile = {
   postgresUrl?: string;
   sqlitePath?: string;
   authSecret?: string;
+  googleClientId?: string;
+  googleClientSecret?: string;
 };
 
 const CONFIG_DIR = path.join(process.cwd(), "data");

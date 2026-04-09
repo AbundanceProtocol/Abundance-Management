@@ -4,7 +4,7 @@ import type { CSSProperties, ReactNode } from "react";
 import Link from "next/link";
 import { useLayoutEffect, useRef, useState } from "react";
 import { SEGMENTED_ACTIVE } from "@/lib/segmentedControlStyles";
-import { ClipboardList, FileText, MindMap } from "./Icons";
+import { Calendar, ClipboardList, FileText, MindMap } from "./Icons";
 
 const SEGMENT_BASE: CSSProperties = {
   fontSize: 12,
@@ -72,12 +72,19 @@ function makeSegments(compact: boolean): NavSegment[] {
       href: "/mind-maps",
       icon: <MindMap size={s} />,
     },
+    {
+      key: "calendar",
+      labelFull: "Calendar",
+      href: "/calendar",
+      icon: <Calendar size={s} />,
+    },
   ];
 }
 
 function segmentLabel(seg: NavSegment, density: Density): string {
   if (density === "icons") return "";
   if (density === "abbrev" && seg.key === "mind-maps") return "Map";
+  if (density === "abbrev" && seg.key === "calendar") return "Cal";
   return seg.labelFull;
 }
 
@@ -110,7 +117,7 @@ export function AppNavTasksPages({
   active,
   compact = false,
 }: {
-  active: "tasks" | "pages" | "mind-maps";
+  active: "tasks" | "pages" | "mind-maps" | "calendar";
   compact?: boolean;
 }) {
   const seg = compact ? SEGMENT_BASE_COMPACT : SEGMENT_BASE;
@@ -181,14 +188,11 @@ export function AppNavTasksPages({
           const border: CSSProperties =
             i > 0 ? { borderLeft: "1px solid var(--border-color)" } : {};
           const label = segmentLabel(s, density);
-          const a11yOverride =
-            density === "icons" || (density === "abbrev" && s.key === "mind-maps")
-              ? s.labelFull
-              : undefined;
-          const tip =
-            density === "icons" || (density === "abbrev" && s.key === "mind-maps")
-              ? s.labelFull
-              : undefined;
+          const needsOverride =
+            density === "icons" ||
+            (density === "abbrev" && (s.key === "mind-maps" || s.key === "calendar"));
+          const a11yOverride = needsOverride ? s.labelFull : undefined;
+          const tip = needsOverride ? s.labelFull : undefined;
           const content = (
             <>
               <span style={NAV_ICON_WRAP}>{s.icon}</span>

@@ -39,6 +39,7 @@ import TaskRow from "./TaskRow";
 import NestDropZone from "./NestDropZone";
 import TaskDetailPanel from "./TaskDetailPanel";
 import DeleteTaskConfirmModal from "./DeleteTaskConfirmModal";
+import { AppNavTasksPages } from "./AppNavTasksPages";
 import { useViewportNarrow } from "@/lib/useViewportNarrow";
 import {
   MobileAppMenuCollapsedBar,
@@ -591,6 +592,9 @@ export default function TaskZoomView({ taskId }: { taskId: string }) {
           >
             Section: {section.title}
           </p>
+          <div style={{ marginTop: 10, maxWidth: 560 }}>
+            <AppNavTasksPages active="tasks" compact={viewportNarrow} />
+          </div>
           </div>
         </header>
         )}

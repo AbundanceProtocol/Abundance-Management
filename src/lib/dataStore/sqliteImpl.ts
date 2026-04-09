@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import type Database from "better-sqlite3";
-import type { AppDataStore, BackupPayload, ReorderItem, UserRecord } from "@/lib/dataStore/types";
+import type { AppDataStore, BackupPayload, GoogleOAuthToken, ReorderItem, UserRecord } from "@/lib/dataStore/types";
 import type { PagesEnvironment } from "@/lib/pagesTypes";
 import type { MindMapsEnvironment } from "@/lib/mindMapTypes";
 import type { NewTask, Section, TaskItem } from "@/lib/types";
@@ -421,6 +421,42 @@ export function buildSqliteDataStore(db: Database.Database): AppDataStore {
       if (new Date(row.expires_at) < new Date()) return null;
       delTok.run(tokenHash);
       return { userId: row.user_id };
+    },
+
+    async getGoogleOAuthToken(userId) {
+      const row = db
+        .prepare("SELECT doc FROM google_oauth_tokens WHERE user_id = ?")
+        .get(userId) as { doc: string } | undefined;
+      if (!row) return null;
+      return JSON.parse(row.doc) as GoogleOAuthToken;
+    },
+
+    async saveGoogleOAuthToken(token) {
+      db.prepare(
+        `INSERT INTO google_oauth_tokens (user_id, doc) VALUES (?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET doc = excluded.doc`
+      ).run(token.userId, JSON.stringify(token));
+    },
+
+    async deleteGoogleOAuthToken(userId) {
+      db.prepare("DELETE FROM google_oauth_tokens WHERE user_id = ?").run(userId);
+    },
+
+    async clearGoogleCalendarFieldsOnAllTasks() {
+      const rows = selTasks.all() as { id: string; doc: string }[];
+      for (const row of rows) {
+        const task = JSON.parse(row.doc) as TaskItem;
+        if (task.googleCalendarEventId || task.googleCalendarSyncStatus) {
+          const updated = {
+            ...task,
+            googleCalendarEventId: null,
+            googleCalendarSyncedAt: null,
+            googleCalendarSyncStatus: null,
+            updatedAt: new Date().toISOString(),
+          };
+          updTask.run(JSON.stringify(updated), row.id);
+        }
+      }
     },
   };
 }

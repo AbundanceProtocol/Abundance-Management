@@ -49,7 +49,7 @@ interface Props {
   section: Section | null;
   onUpdate: (task: Partial<TaskItem> & { _id: string }) => void;
   onClose: () => void;
-  /** Direct children count; used to show “subtasks on board” control. */
+  /** Direct children count; used to show "subtasks on board" control. */
   directChildCount: number;
   /** Duplicate this task and its subtree as siblings below; optional. */
   onDuplicate?: () => void | Promise<void>;
@@ -142,6 +142,18 @@ export default function TaskDetailPanel({
     normalizeTaskWeight(task.taskWeight)
   );
   const [category, setCategory] = useState(() => (task.category ?? "").trim());
+  const existingCategories = useMemo(() => {
+    if (!tasks) return [];
+    const seen = new Set<string>();
+    for (const t of tasks) {
+      const c = (t.category ?? "").trim();
+      if (c) seen.add(c);
+    }
+    return Array.from(seen).sort((a, b) => a.localeCompare(b));
+  }, [tasks]);
+  const [viewTokens, setViewTokens] = useState<{ _id: string; name: string }[]>([]);
+  const [viewTokensLoaded, setViewTokensLoaded] = useState(false);
+  const [viewTokensOpen, setViewTokensOpen] = useState(false);
   const [reparentBusy, setReparentBusy] = useState(false);
   const [createSubtaskBusy, setCreateSubtaskBusy] = useState(false);
   const [attachBusy, setAttachBusy] = useState(false);
@@ -157,6 +169,25 @@ export default function TaskDetailPanel({
     setMindMapSubtaskImportNote(null);
     setGcalSyncMsg(null);
   }, [task._id]);
+
+  // Lazy-load view tokens when the visibility section is opened
+  useEffect(() => {
+    if (!viewTokensOpen || viewTokensLoaded) return;
+    fetch("/api/view-tokens")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => {
+        setViewTokens(Array.isArray(data) ? data : []);
+        setViewTokensLoaded(true);
+      })
+      .catch(() => { setViewTokensLoaded(true); });
+  }, [viewTokensOpen, viewTokensLoaded]);
+
+  // Invalidate cache when Settings creates or deletes a view token
+  useEffect(() => {
+    const handler = () => setViewTokensLoaded(false);
+    window.addEventListener("viewtokens:updated", handler);
+    return () => window.removeEventListener("viewtokens:updated", handler);
+  }, []);
 
   const sectionTasks = useMemo(
     () => (tasks ?? []).filter((t) => t.sectionId === task.sectionId),
@@ -867,6 +898,7 @@ export default function TaskDetailPanel({
           </label>
           <input
             type="text"
+            list="category-suggestions"
             value={category}
             onChange={(e) => setCategory(e.target.value)}
             onBlur={() => {
@@ -889,6 +921,11 @@ export default function TaskDetailPanel({
               boxSizing: "border-box",
             }}
           />
+          <datalist id="category-suggestions">
+            {existingCategories.map((c) => (
+              <option key={c} value={c} />
+            ))}
+          </datalist>
           <p
             style={{
               fontSize: 11,
@@ -897,9 +934,76 @@ export default function TaskDetailPanel({
               lineHeight: 1.4,
             }}
           >
-            Use “Group by category” in the section header to show headings and group
+            Use "Group by category" in the section header to show headings and group
             tasks.
           </p>
+        </div>
+
+        {/* View-only visibility */}
+        <div>
+          <button
+            type="button"
+            onClick={() => setViewTokensOpen((o) => !o)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              background: "none",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              fontSize: 12,
+              color: "var(--text-secondary)",
+              fontWeight: 600,
+            }}
+          >
+            <span style={{ fontSize: 10 }}>{viewTokensOpen ? "▼" : "▶"}</span>
+            View-only visibility
+          </button>
+          {viewTokensOpen && (
+            <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+              {!viewTokensLoaded ? (
+                <p style={{ margin: 0, fontSize: 11, color: "var(--text-muted)" }}>Loading…</p>
+              ) : viewTokens.length === 0 ? (
+                <p style={{ margin: 0, fontSize: 11, color: "var(--text-muted)" }}>
+                  No shared views yet. Create one in Settings → Sharing.
+                </p>
+              ) : (
+                viewTokens.map((vt) => {
+                  const hidden = task.hiddenFromViews?.includes(vt._id) ?? false;
+                  return (
+                    <label
+                      key={vt._id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        fontSize: 12,
+                        color: "var(--text-primary)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={hidden}
+                        onChange={() => {
+                          const prev = task.hiddenFromViews ?? [];
+                          const next = hidden
+                            ? prev.filter((id) => id !== vt._id)
+                            : [...prev, vt._id];
+                          persistPartial({ hiddenFromViews: next });
+                        }}
+                        style={{ accentColor: "var(--accent-blue)", width: 14, height: 14 }}
+                      />
+                      <span style={{ textDecoration: hidden ? "line-through" : "none", color: hidden ? "var(--text-muted)" : "var(--text-primary)" }}>
+                        Hide from <strong>{vt.name}</strong>
+                      </span>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+          )}
         </div>
 
         {tasks && reorderTasks && section && (

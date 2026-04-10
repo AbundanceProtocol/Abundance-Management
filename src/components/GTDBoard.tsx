@@ -824,6 +824,45 @@ export default function GTDBoard() {
                 </button>
               ))}
             </div>
+            {viewportNarrow && (
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  borderRadius: 8,
+                  border: "1px solid var(--border-color)",
+                  overflow: "hidden",
+                  width: "100%",
+                }}
+              >
+                {(
+                  [
+                    { view: "project", label: "Project" },
+                    { view: "recurring", label: "Recurring" },
+                    { view: "todo", label: "To-do" },
+                  ] as const
+                ).map((opt, i) => (
+                  <Link
+                    key={opt.view}
+                    href={`/?view=${opt.view}`}
+                    scroll={false}
+                    onClick={() => setMobileBoardMenuOpen(false)}
+                    style={{
+                      ...MOBILE_MENU_BUTTON,
+                      border: "none",
+                      borderLeft: i > 0 ? "1px solid var(--border-color)" : "none",
+                      textDecoration: "none",
+                      textAlign: "center",
+                      flex: "1 1 auto",
+                      minWidth: 0,
+                      ...(tasksView === opt.view ? SEGMENTED_ACTIVE : SEGMENTED_INACTIVE),
+                    }}
+                  >
+                    {opt.label}
+                  </Link>
+                ))}
+              </div>
+            )}
             {boardTab === "board" && (
               <SegmentedBooleanToggle
                 label="Completed"

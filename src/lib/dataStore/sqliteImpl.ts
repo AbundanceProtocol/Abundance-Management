@@ -3,7 +3,7 @@ import type Database from "better-sqlite3";
 import type { AppDataStore, BackupPayload, GoogleOAuthToken, ReorderItem, UserRecord } from "@/lib/dataStore/types";
 import type { PagesEnvironment } from "@/lib/pagesTypes";
 import type { MindMapsEnvironment } from "@/lib/mindMapTypes";
-import type { NewTask, Section, TaskItem } from "@/lib/types";
+import type { NewTask, Section, TaskItem, ViewToken } from "@/lib/types";
 import { DEFAULT_PAGES_ENVIRONMENT } from "@/lib/pagesTypes";
 import { DEFAULT_MIND_MAPS_ENVIRONMENT } from "@/lib/mindMapTypes";
 import { normalizeUrlsFromDoc } from "@/lib/taskUrls";
@@ -457,6 +457,32 @@ export function buildSqliteDataStore(db: Database.Database): AppDataStore {
           updTask.run(JSON.stringify(updated), row.id);
         }
       }
+    },
+
+    async getViewTokens() {
+      const rows = db.prepare("SELECT id, name, token, created_at FROM view_tokens ORDER BY created_at ASC").all() as {
+        id: string; name: string; token: string; created_at: string;
+      }[];
+      return rows.map((r) => ({ _id: r.id, name: r.name, token: r.token, createdAt: r.created_at }));
+    },
+
+    async createViewToken(vt) {
+      db.prepare("INSERT INTO view_tokens (id, name, token, created_at) VALUES (?, ?, ?, ?)").run(
+        vt._id, vt.name, vt.token, vt.createdAt
+      );
+      return vt;
+    },
+
+    async deleteViewToken(id) {
+      db.prepare("DELETE FROM view_tokens WHERE id = ?").run(id);
+    },
+
+    async getViewTokenByToken(token) {
+      const row = db.prepare("SELECT id, name, token, created_at FROM view_tokens WHERE token = ?").get(token) as
+        | { id: string; name: string; token: string; created_at: string }
+        | undefined;
+      if (!row) return null;
+      return { _id: row.id, name: row.name, token: row.token, createdAt: row.created_at };
     },
   };
 }

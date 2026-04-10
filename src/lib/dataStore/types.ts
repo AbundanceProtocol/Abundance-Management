@@ -1,6 +1,6 @@
 import type { PagesEnvironment } from "@/lib/pagesTypes";
 import type { MindMapsEnvironment } from "@/lib/mindMapTypes";
-import type { NewTask, Section, TaskItem } from "@/lib/types";
+import type { NewTask, Section, TaskItem, ViewToken } from "@/lib/types";
 
 export type ReorderItem = {
   _id: string;
@@ -86,4 +86,8 @@ export interface AppDataStore {
     expiresAt: string;
   }): Promise<void>;
   consumePasswordResetToken(tokenHash: string): Promise<{ userId: string } | null>;
+  getViewTokens(): Promise<ViewToken[]>;
+  createViewToken(token: ViewToken): Promise<ViewToken>;
+  deleteViewToken(id: string): Promise<void>;
+  getViewTokenByToken(token: string): Promise<ViewToken | null>;
 }

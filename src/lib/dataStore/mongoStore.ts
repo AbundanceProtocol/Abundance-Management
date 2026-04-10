@@ -2,7 +2,7 @@ import { MongoClient, Db, ObjectId } from "mongodb";
 import type { AppDataStore, BackupPayload, GoogleOAuthToken, ReorderItem, UserRecord } from "@/lib/dataStore/types";
 import type { PagesEnvironment } from "@/lib/pagesTypes";
 import type { MindMapsEnvironment } from "@/lib/mindMapTypes";
-import type { NewTask, Section, TaskItem } from "@/lib/types";
+import type { NewTask, Section, TaskItem, ViewToken } from "@/lib/types";
 import { readAppConfig } from "@/lib/appConfig";
 import { DEFAULT_PAGES_ENVIRONMENT } from "@/lib/pagesTypes";
 import { DEFAULT_MIND_MAPS_ENVIRONMENT } from "@/lib/mindMapTypes";
@@ -414,6 +414,41 @@ export async function createMongoStore(): Promise<AppDataStore> {
         { _id: new ObjectId(userId) },
         { $set: set }
       );
+    },
+
+    async getViewTokens() {
+      const docs = await database.collection("view_tokens").find({}).sort({ createdAt: 1 }).toArray();
+      return docs.map((d) => ({
+        _id: d._id.toString(),
+        name: d.name as string,
+        token: d.token as string,
+        createdAt: d.createdAt as string,
+      }));
+    },
+
+    async createViewToken(vt: ViewToken) {
+      await database.collection("view_tokens").insertOne({
+        _id: vt._id as unknown as ObjectId,
+        name: vt.name,
+        token: vt.token,
+        createdAt: vt.createdAt,
+      });
+      return vt;
+    },
+
+    async deleteViewToken(id: string) {
+      await database.collection("view_tokens").deleteOne({ _id: id as unknown as ObjectId });
+    },
+
+    async getViewTokenByToken(token: string) {
+      const doc = await database.collection("view_tokens").findOne({ token });
+      if (!doc) return null;
+      return {
+        _id: doc._id.toString(),
+        name: doc.name as string,
+        token: doc.token as string,
+        createdAt: doc.createdAt as string,
+      };
     },
   };
 }

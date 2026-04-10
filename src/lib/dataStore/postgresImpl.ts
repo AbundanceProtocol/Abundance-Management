@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import type { AppDataStore, BackupPayload, GoogleOAuthToken, ReorderItem, UserRecord } from "@/lib/dataStore/types";
 import type { PagesEnvironment } from "@/lib/pagesTypes";
 import type { MindMapsEnvironment } from "@/lib/mindMapTypes";
-import type { NewTask, Section, TaskItem } from "@/lib/types";
+import type { NewTask, Section, TaskItem, ViewToken } from "@/lib/types";
 import { DEFAULT_PAGES_ENVIRONMENT } from "@/lib/pagesTypes";
 import { DEFAULT_MIND_MAPS_ENVIRONMENT } from "@/lib/mindMapTypes";
 import { normalizeUrlsFromDoc } from "@/lib/taskUrls";
@@ -523,6 +523,35 @@ export function buildPostgresDataStore(pool: Pool): AppDataStore {
           ]);
         }
       }
+    },
+
+    async getViewTokens() {
+      const { rows } = await pool.query<{ id: string; name: string; token: string; created_at: string }>(
+        "SELECT id, name, token, created_at FROM view_tokens ORDER BY created_at ASC"
+      );
+      return rows.map((r) => ({ _id: r.id, name: r.name, token: r.token, createdAt: r.created_at }));
+    },
+
+    async createViewToken(vt: ViewToken) {
+      await pool.query(
+        "INSERT INTO view_tokens (id, name, token, created_at) VALUES ($1, $2, $3, $4)",
+        [vt._id, vt.name, vt.token, vt.createdAt]
+      );
+      return vt;
+    },
+
+    async deleteViewToken(id: string) {
+      await pool.query("DELETE FROM view_tokens WHERE id = $1", [id]);
+    },
+
+    async getViewTokenByToken(token: string) {
+      const { rows } = await pool.query<{ id: string; name: string; token: string; created_at: string }>(
+        "SELECT id, name, token, created_at FROM view_tokens WHERE token = $1",
+        [token]
+      );
+      if (!rows[0]) return null;
+      const r = rows[0];
+      return { _id: r.id, name: r.name, token: r.token, createdAt: r.created_at };
     },
   };
 }

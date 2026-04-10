@@ -90,8 +90,18 @@ export interface TaskItem {
   googleCalendarSyncedAt?: string | null;
   /** Sync state: synced | pending | error — absent means never synced. */
   googleCalendarSyncStatus?: "synced" | "pending" | "error" | null;
+  /** IDs of ViewTokens this task is hidden from. Subtasks are auto-hidden when a parent is hidden. */
+  hiddenFromViews?: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** A named read-only share link. The `token` field is the URL-safe secret in the share URL. */
+export interface ViewToken {
+  _id: string;
+  name: string;
+  token: string;
+  createdAt: string;
 }
 
 export interface Section {

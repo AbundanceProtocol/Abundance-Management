@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation";
 import { Calendar, Download, Upload, LogOut } from "./Icons";
 
-type SettingsTab = "backup" | "calendar" | "account" | "danger";
+type SettingsTab = "backup" | "calendar" | "account" | "sharing" | "danger";
 
 type SessionAccount = {
   skipAuth: boolean;
@@ -62,6 +62,14 @@ export default function SettingsModal({ open, onClose, onImportComplete }: Props
   const [gcalSyncResult, setGcalSyncResult] = useState<string | null>(null);
   const [gcalDisconnecting, setGcalDisconnecting] = useState(false);
 
+  // Sharing / view-only tokens
+  type ViewTokenLocal = { _id: string; name: string; token: string; createdAt: string };
+  const [viewTokens, setViewTokens] = useState<ViewTokenLocal[]>([]);
+  const [sharingLoading, setSharingLoading] = useState(false);
+  const [newViewName, setNewViewName] = useState("");
+  const [creatingView, setCreatingView] = useState(false);
+  const [copiedTokenId, setCopiedTokenId] = useState<string | null>(null);
+
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -95,6 +103,19 @@ export default function SettingsModal({ open, onClose, onImportComplete }: Props
   useEffect(() => {
     setError(null);
   }, [activeTab]);
+
+  // Load view tokens when sharing tab is active
+  useEffect(() => {
+    if (!open || activeTab !== "sharing") return;
+    let cancelled = false;
+    setSharingLoading(true);
+    fetch("/api/view-tokens")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => { if (!cancelled) setViewTokens(Array.isArray(data) ? data : []); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setSharingLoading(false); });
+    return () => { cancelled = true; };
+  }, [open, activeTab]);
 
   const credCanSubmit = useMemo(() => {
     if (credSaving || !currentPassword.trim()) return false;
@@ -325,6 +346,40 @@ export default function SettingsModal({ open, onClose, onImportComplete }: Props
     finally { setGcalDisconnecting(false); }
   }, []);
 
+  const handleCreateView = useCallback(async () => {
+    if (!newViewName.trim()) return;
+    setCreatingView(true);
+    try {
+      const res = await fetch("/api/view-tokens", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newViewName.trim() }),
+      });
+      if (!res.ok) { setError("Failed to create view"); return; }
+      const vt = await res.json();
+      setViewTokens((prev) => [...prev, vt]);
+      setNewViewName("");
+      window.dispatchEvent(new Event("viewtokens:updated"));
+    } catch { setError("Network error"); }
+    finally { setCreatingView(false); }
+  }, [newViewName]);
+
+  const handleDeleteView = useCallback(async (id: string) => {
+    try {
+      await fetch(`/api/view-tokens?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      setViewTokens((prev) => prev.filter((v) => v._id !== id));
+      window.dispatchEvent(new Event("viewtokens:updated"));
+    } catch { setError("Failed to delete view"); }
+  }, []);
+
+  const handleCopyLink = useCallback((token: string, id: string) => {
+    const base = window.location.origin;
+    navigator.clipboard.writeText(`${base}/view/${token}`).then(() => {
+      setCopiedTokenId(id);
+      setTimeout(() => setCopiedTokenId(null), 2000);
+    }).catch(() => {});
+  }, []);
+
   if (!open) return null;
 
   const showAccount = account && !account.skipAuth;
@@ -332,6 +387,7 @@ export default function SettingsModal({ open, onClose, onImportComplete }: Props
   const navItems: { key: SettingsTab; label: string; icon?: React.ReactNode }[] = [
     { key: "backup", label: "Backup" },
     { key: "calendar", label: "Google Cal", icon: <Calendar size={13} /> },
+    { key: "sharing", label: "Sharing" },
     ...(showAccount ? [{ key: "account" as SettingsTab, label: "Account" }] : []),
     { key: "danger", label: "Danger zone" },
   ];
@@ -842,6 +898,127 @@ export default function SettingsModal({ open, onClose, onImportComplete }: Props
                     </button>
                   </>
                 ) : null}
+              </>
+            )}
+
+            {activeTab === "sharing" && (
+              <>
+                <SectionHeading>View-only shared links</SectionHeading>
+                <p style={{ margin: 0, fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                  Each shared link lets anyone with the URL view your board in read-only mode.
+                  You can hide individual tasks per view from the task details panel.
+                </p>
+
+                {/* Create new view */}
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    type="text"
+                    value={newViewName}
+                    onChange={(e) => setNewViewName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") handleCreateView(); }}
+                    placeholder="View name (e.g. Client View)"
+                    style={{ ...inputSm, flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCreateView}
+                    disabled={creatingView || !newViewName.trim()}
+                    style={{
+                      padding: "8px 14px",
+                      borderRadius: 6,
+                      border: "none",
+                      background: "var(--accent-blue)",
+                      color: "#fff",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: creatingView || !newViewName.trim() ? "not-allowed" : "pointer",
+                      opacity: creatingView || !newViewName.trim() ? 0.6 : 1,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {creatingView ? "Creating…" : "Create"}
+                  </button>
+                </div>
+
+                {/* List of view tokens */}
+                {sharingLoading ? (
+                  <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)" }}>Loading…</p>
+                ) : viewTokens.length === 0 ? (
+                  <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)" }}>
+                    No shared views yet. Create one above.
+                  </p>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {viewTokens.map((vt) => (
+                      <div
+                        key={vt._id}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          padding: "10px 12px",
+                          borderRadius: 8,
+                          border: "1px solid var(--border-color)",
+                          background: "var(--bg-secondary)",
+                        }}
+                      >
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>
+                            {vt.name}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: "var(--text-muted)",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                              marginTop: 2,
+                            }}
+                          >
+                            /view/{vt.token}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyLink(vt.token, vt._id)}
+                          style={{
+                            padding: "5px 10px",
+                            borderRadius: 5,
+                            border: "1px solid var(--border-color)",
+                            background: copiedTokenId === vt._id ? "var(--bg-success, #16a34a)" : "var(--bg-tertiary)",
+                            color: copiedTokenId === vt._id ? "#fff" : "var(--text-secondary)",
+                            fontSize: 11,
+                            fontWeight: 600,
+                            cursor: "pointer",
+                            flexShrink: 0,
+                            transition: "background 0.2s",
+                          }}
+                        >
+                          {copiedTokenId === vt._id ? "Copied!" : "Copy link"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteView(vt._id)}
+                          title="Delete this shared view"
+                          style={{
+                            padding: "5px 8px",
+                            borderRadius: 5,
+                            border: "1px solid var(--border-color)",
+                            background: "transparent",
+                            color: "var(--accent-red, #ef4444)",
+                            fontSize: 13,
+                            cursor: "pointer",
+                            flexShrink: 0,
+                            lineHeight: 1,
+                          }}
+                        >
+                          &times;
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </>
             )}
 

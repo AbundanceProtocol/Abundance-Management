@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useViewportNarrow } from "../lib/useViewportNarrow";
 import type { TaskItem } from "../lib/types";
 import { Calendar, ChevronDown, ClipboardList, FileText, MindMap } from "./Icons";
@@ -56,6 +56,8 @@ function computeTopTasks(allTasks: TaskItem[]): TaskItem[] {
 export function QuickAccessFAB() {
   const isNarrow = useViewportNarrow();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const activeView = searchParams.get("view") ?? "all";
   const [open, setOpen] = useState(false);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
 
@@ -154,6 +156,36 @@ export function QuickAccessFAB() {
               >
                 <span style={{ display: "inline-flex" }}>{nav.icon}</span>
                 {nav.label}
+              </Link>
+            ))}
+          </div>
+
+          {/* Section type shortcuts */}
+          <div style={{ display: "flex", borderTop: "1px solid var(--border-color)" }}>
+            {(
+              [
+                { view: "project", label: "Project" },
+                { view: "recurring", label: "Recurring" },
+                { view: "todo", label: "To-do" },
+              ] as const
+            ).map((opt, i) => (
+              <Link
+                key={opt.view}
+                href={`/?view=${opt.view}`}
+                onClick={() => setOpen(false)}
+                style={{
+                  flex: 1,
+                  padding: "8px 4px",
+                  fontSize: 11,
+                  fontWeight: activeView === opt.view ? 700 : 500,
+                  color: activeView === opt.view ? "var(--accent-blue)" : "var(--text-muted)",
+                  textDecoration: "none",
+                  textAlign: "center",
+                  borderLeft: i > 0 ? "1px solid var(--border-color)" : "none",
+                  background: activeView === opt.view ? "var(--bg-secondary)" : "transparent",
+                }}
+              >
+                {opt.label}
               </Link>
             ))}
           </div>

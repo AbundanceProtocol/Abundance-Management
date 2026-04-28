@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import "./globals.css";
 import { QuickAccessFAB } from "../components/QuickAccessFAB";
 
@@ -16,7 +17,9 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className="antialiased" suppressHydrationWarning>
         {children}
-        <QuickAccessFAB />
+        <Suspense fallback={null}>
+          <QuickAccessFAB />
+        </Suspense>
       </body>
     </html>
   );

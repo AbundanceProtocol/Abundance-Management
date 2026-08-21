@@ -25,8 +25,10 @@ export interface MindMapNode {
   label: string;
   /** Reference to an existing task (kind === "task"). */
   taskId?: string | null;
-  /** Free-form markdown body (kind === "note"). */
+  /** Free-form content shown under the title inside the node bubble. */
   body?: string | null;
+  /** Custom outline (border) color for this node's bubble; omit to use the kind default. */
+  outlineColor?: string | null;
   /** URL string (kind === "artifact"). */
   url?: string | null;
   /** When true, a linked task is also shown on the Tasks board; when false it is mind-map-only. */

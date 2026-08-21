@@ -111,6 +111,38 @@ const KIND_LABELS: Record<MindMapNodeKind, string> = {
   artifact: "URL",
 };
 
+/** Selectable outline colors for node bubbles (swatches shown in the detail panel). */
+const NODE_OUTLINE_COLORS = [
+  "#4b9cf5",
+  "#ec4899",
+  "#f59e0b",
+  "#22c55e",
+  "#a855f7",
+  "#ef4444",
+  "#06b6d4",
+  "#e4e6ea",
+];
+
+/** Effective bubble style for a node: kind default, with an optional custom outline color. */
+function nodeVisualStyle(kind: MindMapNodeKind, outlineColor?: string | null): React.CSSProperties {
+  const base = KIND_STYLE[kind] ?? KIND_STYLE.idea;
+  if (!outlineColor) return base;
+  return { ...base, border: `2px solid ${outlineColor}` };
+}
+
+/** Kind default outline color, used when a node has no custom outline color set. */
+const KIND_DEFAULT_OUTLINE_COLOR: Record<MindMapNodeKind, string> = {
+  idea: "var(--accent-blue)",
+  task: "var(--accent-blue)",
+  note: "var(--accent-purple)",
+  artifact: "var(--accent-amber)",
+};
+
+/** Effective outline color for a node (custom color if set, else its kind default). */
+function nodeOutlineColor(n: Pick<MindMapNode, "kind" | "outlineColor">): string {
+  return n.outlineColor || KIND_DEFAULT_OUTLINE_COLOR[n.kind] || KIND_DEFAULT_OUTLINE_COLOR.idea;
+}
+
 /** Path shape for parent → child connectors (Bezier first — app default). */
 const EDGE_LINE_LABELS: Record<MindMapEdgeLineType, string> = {
   default: "Bezier curve",
@@ -199,12 +231,15 @@ const HANDLE_DOT: React.CSSProperties = {
 
 type MindMapNodeData = {
   label: string;
+  body?: string | null;
   kind: MindMapNodeKind;
+  outlineColor?: string | null;
   url?: string | null;
   taskId?: string | null;
   taskCompleted?: boolean;
   selected?: boolean;
   onLabelChange: (id: string, label: string) => void;
+  onBodyChange: (id: string, body: string) => void;
   onAddChild: (id: string) => void;
   onDelete: (id: string) => void;
   onToggleComplete: (id: string) => void;
@@ -213,16 +248,33 @@ type MindMapNodeData = {
 
 function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
   const [editing, setEditing] = useState(false);
+  const [editingBody, setEditingBody] = useState(false);
   const [draft, setDraft] = useState(data.label);
+  const [bodyDraft, setBodyDraft] = useState(data.body ?? "");
   const inputRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     setDraft(data.label);
   }, [data.label]);
 
   useEffect(() => {
+    setBodyDraft(data.body ?? "");
+  }, [data.body]);
+
+  useEffect(() => {
     if (editing) inputRef.current?.focus();
   }, [editing]);
+
+  useEffect(() => {
+    if (editingBody) {
+      const el = bodyRef.current;
+      if (!el) return;
+      el.focus();
+      el.style.height = "auto";
+      el.style.height = `${Math.max(el.scrollHeight, 32)}px`;
+    }
+  }, [editingBody]);
 
   const commit = () => {
     setEditing(false);
@@ -231,7 +283,17 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
     }
   };
 
-  const style = KIND_STYLE[data.kind] ?? KIND_STYLE.idea;
+  const commitBody = () => {
+    setEditingBody(false);
+    const next = bodyDraft.trimEnd();
+    if (next !== (data.body ?? "")) {
+      data.onBodyChange(id, next);
+    }
+  };
+
+  const style = nodeVisualStyle(data.kind, data.outlineColor);
+  const hasBody = Boolean((data.body ?? "").trim());
+  const showBodyArea = hasBody || editingBody || data.selected;
 
   return (
     <div
@@ -242,9 +304,9 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
       style={{
         ...style,
         borderRadius: 24,
-        padding: "10px 20px",
+        padding: showBodyArea ? "12px 18px 14px" : "10px 20px",
         minWidth: 100,
-        maxWidth: 260,
+        maxWidth: 280,
         textAlign: "center",
         fontSize: 13,
         fontWeight: 500,
@@ -403,6 +465,86 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
         )}
       </div>
 
+      {showBodyArea && (
+        <div
+          style={{
+            marginTop: 8,
+            width: "100%",
+            textAlign: "left",
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          {editingBody ? (
+            <textarea
+              ref={bodyRef}
+              value={bodyDraft}
+              onChange={(e) => {
+                setBodyDraft(e.target.value);
+                const el = e.target;
+                el.style.height = "auto";
+                el.style.height = `${Math.max(el.scrollHeight, 32)}px`;
+              }}
+              onBlur={commitBody}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setBodyDraft(data.body ?? "");
+                  setEditingBody(false);
+                }
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  commitBody();
+                }
+              }}
+              placeholder="Add content…"
+              rows={2}
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                background: "rgba(0,0,0,0.18)",
+                border: "1px solid var(--border-color)",
+                borderRadius: 8,
+                color: "var(--text-primary)",
+                fontSize: 11,
+                fontWeight: 400,
+                lineHeight: 1.45,
+                resize: "none",
+                outline: "none",
+                padding: "6px 8px",
+                fontFamily: "inherit",
+                minHeight: 32,
+              }}
+            />
+          ) : (
+            <div
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setEditingBody(true);
+              }}
+              onClick={(e) => {
+                if (!hasBody) {
+                  e.stopPropagation();
+                  setEditingBody(true);
+                }
+              }}
+              style={{
+                fontSize: 11,
+                fontWeight: 400,
+                lineHeight: 1.45,
+                color: hasBody ? "var(--text-secondary)" : "var(--text-muted)",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                cursor: "text",
+                minHeight: hasBody ? undefined : 16,
+                opacity: data.taskCompleted ? 0.55 : 1,
+              }}
+            >
+              {hasBody ? data.body : "Add content…"}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Hover actions */}
       <div
         className="mindmap-node-actions"
@@ -475,6 +617,7 @@ function toFlowNodes(
   mapNodes: MindMapNode[],
   callbacks: {
     onLabelChange: (id: string, label: string) => void;
+    onBodyChange: (id: string, body: string) => void;
     onAddChild: (id: string) => void;
     onDelete: (id: string) => void;
     onToggleComplete: (id: string) => void;
@@ -491,7 +634,9 @@ function toFlowNodes(
       position: { x: n.x, y: n.y },
       data: {
         label: linkedTask ? (linkedTask.title || n.label) : n.label,
+        body: n.body ?? "",
         kind: n.kind,
+        outlineColor: n.outlineColor ?? null,
         url: n.url,
         taskId: n.taskId,
         taskCompleted: linkedTask?.completed ?? false,
@@ -503,11 +648,12 @@ function toFlowNodes(
 }
 
 function toFlowEdges(mapNodes: MindMapNode[], mapDefault: MindMapEdgeLineType): Edge[] {
-  let colorIdx = 0;
+  const byId = new Map(mapNodes.map((n) => [n.id, n]));
   return mapNodes
     .filter((n) => n.parentId)
     .map((n) => {
-      const c = edgeColor(colorIdx++);
+      const parent = byId.get(n.parentId!);
+      const c = parent ? nodeOutlineColor(parent) : edgeColor(0);
       const lineType = effectiveParentEdgeLineType(n, mapDefault);
       return {
         id: `e-${n.parentId}-${n.id}`,
@@ -871,6 +1017,52 @@ function NodeDetailPanel({
                 </option>
               ))}
             </select>
+          </div>
+
+          <div>
+            <div style={LBL}>Outline color</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+              {NODE_OUTLINE_COLORS.map((c) => {
+                const active = (node.outlineColor ?? null) === c;
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    title={c}
+                    onClick={() => onUpdateNode(node.id, { outlineColor: c })}
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: "50%",
+                      background: c,
+                      border: active
+                        ? "2px solid var(--text-primary)"
+                        : "1px solid var(--border-color)",
+                      boxShadow: active ? "0 0 0 2px var(--bg-secondary)" : "none",
+                      cursor: "pointer",
+                      padding: 0,
+                      flexShrink: 0,
+                    }}
+                  />
+                );
+              })}
+              <button
+                type="button"
+                title="Reset to default"
+                onClick={() => onUpdateNode(node.id, { outlineColor: null })}
+                style={{
+                  fontSize: 11,
+                  color: "var(--text-muted)",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: "2px 4px",
+                  textDecoration: "underline",
+                }}
+              >
+                Reset
+              </button>
+            </div>
           </div>
 
           {node.kind === "task" && (
@@ -1290,34 +1482,33 @@ function NodeDetailPanel({
             </>
           )}
 
-          {/* Note body */}
-          {node.kind === "note" && (
-            <div>
-              <div style={LBL}>Body</div>
-              <textarea
-                value={body}
-                onChange={(e) => setBody(e.target.value)}
-                onBlur={() => {
-                  if (body !== (node.body ?? "")) {
-                    onUpdateNode(node.id, { body });
-                  }
-                }}
-                rows={6}
-                style={{
-                  width: "100%",
-                  fontSize: 12,
-                  padding: "8px 10px",
-                  borderRadius: 6,
-                  border: "1px solid var(--border-color)",
-                  background: "var(--bg-tertiary)",
-                  color: "var(--text-primary)",
-                  resize: "vertical",
-                  boxSizing: "border-box",
-                  fontFamily: "inherit",
-                }}
-              />
-            </div>
-          )}
+          {/* Content under title (all node kinds) */}
+          <div>
+            <div style={LBL}>Content</div>
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              onBlur={() => {
+                if (body !== (node.body ?? "")) {
+                  onUpdateNode(node.id, { body });
+                }
+              }}
+              rows={5}
+              placeholder="Write content under the title…"
+              style={{
+                width: "100%",
+                fontSize: 12,
+                padding: "8px 10px",
+                borderRadius: 6,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-tertiary)",
+                color: "var(--text-primary)",
+                resize: "vertical",
+                boxSizing: "border-box",
+                fontFamily: "inherit",
+              }}
+            />
+          </div>
 
           {/* Artifact URL */}
           {node.kind === "artifact" && (
@@ -1484,6 +1675,25 @@ export default function MindMapsView() {
     [getLatestMapNodes, upsertMap, setNodes],
   );
 
+  const onBodyChange = useCallback(
+    (id: string, body: string) => {
+      const prev = getLatestMapNodes();
+      const next = prev.map((n) => (n.id === id ? { ...n, body } : n));
+      const map = currentMapRef.current;
+      if (map) {
+        const updated = { ...map, nodes: next, updatedAt: new Date().toISOString() };
+        currentMapRef.current = updated;
+        upsertMap(updated);
+      }
+      setNodes((nds) =>
+        nds.map((nd) =>
+          nd.id === id ? { ...nd, data: { ...nd.data, body } } : nd,
+        ),
+      );
+    },
+    [getLatestMapNodes, upsertMap, setNodes],
+  );
+
   const onToggleComplete = useCallback(
     (nodeId: string) => {
       const mapNodes = getLatestMapNodes();
@@ -1503,12 +1713,13 @@ export default function MindMapsView() {
   const nodeCallbacks = useMemo(
     () => ({
       onLabelChange,
+      onBodyChange,
       onAddChild: null as unknown as (id: string) => void,
       onDelete: null as unknown as (id: string) => void,
       onToggleComplete,
       onSelect: onSelectNode,
     }),
-    [onLabelChange, onToggleComplete, onSelectNode],
+    [onLabelChange, onBodyChange, onToggleComplete, onSelectNode],
   );
 
   const onAddChild = useCallback(
@@ -1702,9 +1913,12 @@ export default function MindMapsView() {
       const stroke = childNode
         ? parentEdgeStrokeStyle(childNode)
         : { strokeWidth: 2 as const };
-      setEdges((eds) => {
-        const c = edgeColor(eds.length);
-        return addEdge(
+      const sourceNode = params.source
+        ? mapNodes.find((n) => n.id === params.source)
+        : undefined;
+      const c = sourceNode ? nodeOutlineColor(sourceNode) : edgeColor(0);
+      setEdges((eds) =>
+        addEdge(
           {
             ...params,
             type: lineType,
@@ -1715,8 +1929,8 @@ export default function MindMapsView() {
             },
           },
           eds,
-        );
-      });
+        ),
+      );
       scheduleSave(next);
     },
     [setEdges, getLatestMapNodes, scheduleSave, upsertMap],
@@ -1828,6 +2042,13 @@ export default function MindMapsView() {
           ),
         );
       }
+      if (patch.body !== undefined) {
+        setNodes((nds) =>
+          nds.map((nd) =>
+            nd.id === id ? { ...nd, data: { ...nd.data, body: patch.body ?? "" } } : nd,
+          ),
+        );
+      }
       if (patch.taskId !== undefined) {
         setNodes((nds) =>
           nds.map((nd) =>
@@ -1842,12 +2063,32 @@ export default function MindMapsView() {
           ),
         );
       }
+      if (patch.url !== undefined) {
+        setNodes((nds) =>
+          nds.map((nd) =>
+            nd.id === id ? { ...nd, data: { ...nd.data, url: patch.url } } : nd,
+          ),
+        );
+      }
+      if (patch.outlineColor !== undefined) {
+        setNodes((nds) =>
+          nds.map((nd) =>
+            nd.id === id
+              ? { ...nd, data: { ...nd.data, outlineColor: patch.outlineColor } }
+              : nd,
+          ),
+        );
+      }
       if (
         "parentEdgeLineType" in patch ||
         "parentEdgeStroke" in patch ||
         "parentLinkSourceSide" in patch ||
-        "parentLinkTargetSide" in patch
+        "parentLinkTargetSide" in patch ||
+        "outlineColor" in patch ||
+        patch.kind != null
       ) {
+        // Edge colors are derived from the source node's outline color, so any
+        // change to a node's color (direct or via kind) must refresh its outgoing edges too.
         setEdges(toFlowEdges(next, mapDefaultEdgeLineType(currentMapRef.current)));
       }
     },

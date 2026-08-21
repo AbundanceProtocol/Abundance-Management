@@ -1,6 +1,8 @@
-# Google Calendar Integration Setup
+# Google Calendar & Google Docs Integration Setup
 
-This app can push tasks with due dates to Google Calendar automatically. Setup takes about 5 minutes inside Google Cloud Console.
+This app can push tasks with due dates to Google Calendar automatically, and can push a mind
+map's outline into a Google Doc. Both features share one Google connection. Setup takes about
+5 minutes inside Google Cloud Console.
 
 ---
 
@@ -13,11 +15,12 @@ This app can push tasks with due dates to Google Calendar automatically. Setup t
 
 ---
 
-## Step 2 — Enable the Google Calendar API
+## Step 2 — Enable the Google APIs
 
 1. In the left sidebar go to **APIs & Services → Library**
-2. Search for **Google Calendar API**
-3. Click it → **Enable**
+2. Search for **Google Calendar API** → click it → **Enable**
+3. Search for **Google Docs API** → click it → **Enable**
+   (skip this one if you only want the Calendar sync, not the mind-map → Doc sync)
 
 ---
 
@@ -71,7 +74,7 @@ This app can push tasks with due dates to Google Calendar automatically. Setup t
 
 ---
 
-## How Sync Works
+## How Calendar Sync Works
 
 | Action | What happens |
 |--------|-------------|
@@ -83,6 +86,25 @@ This app can push tasks with due dates to Google Calendar automatically. Setup t
 | "Sync now" in Settings | Pushes all eligible tasks at once |
 
 **Eligible tasks:** must have a due date, be non-completed, and not be a recurring habit task.
+
+---
+
+## Mind Map → Google Doc Sync
+
+Each mind map can be linked to a Google Doc. Open a mind map, click **Google Doc** in the
+toolbar, paste the Doc's URL, and click **Save URL**. Click **Push to Doc** whenever you want
+to write the map's current outline (node titles as headings, node body text as paragraphs,
+artifact links as hyperlinks) into that document.
+
+- The **connected Google account must be able to edit** that Doc — either it's already the
+  owner/editor, or the Doc was shared with that account with edit access.
+- Pushing only replaces a **reserved section** of the Doc, marked internally by
+  `[[MINDMAP:START]]` / `[[MINDMAP:END]]` markers that are created automatically on first push
+  (at the end of the document). Content outside that section is left untouched. Don't remove
+  or edit those two marker lines by hand, or the next push will re-append a new section instead
+  of replacing the old one.
+- This is a manual, one-way push (app → Doc). Editing the Doc directly does not change the
+  mind map, and nothing is pushed automatically.
 
 ---
 
@@ -102,3 +124,13 @@ This app can push tasks with due dates to Google Calendar automatically. Setup t
 
 **Token expired / stopped syncing after a while**
 → Access tokens are refreshed automatically. If sync stops working, go to Settings → Google Cal → Disconnect, then Connect again.
+
+**"Google denied access to Docs" / Push to Doc fails after upgrading this app**
+→ Your existing connection was authorized before Docs access was requested. Go to Settings →
+Google Cal → Disconnect, then Connect again to grant the new scope. If you skipped enabling
+the Google Docs API in Step 2, do that first.
+
+**"Google Doc not found" when pushing**
+→ Double check the URL, and make sure the Google account connected in this app (Settings →
+Google Cal) is an editor on that Doc — sharing the link as "anyone with the link can edit" is
+not enough by itself unless that's also the account you connected here.

@@ -51,7 +51,13 @@ import {
   Clock,
   Calendar,
   Flag,
+  ArrowDownRight,
+  Undo,
+  Redo,
 } from "./Icons";
+
+/** Maximum number of undo/redo steps kept per mind map. */
+const MAX_HISTORY = 15;
 
 const EDGE_COLORS = [
   "var(--accent-blue)",
@@ -243,7 +249,7 @@ type MindMapNodeData = {
   onAddChild: (id: string) => void;
   onDelete: (id: string) => void;
   onToggleComplete: (id: string) => void;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, additive: boolean) => void;
 };
 
 function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
@@ -299,7 +305,7 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
     <div
       onClick={(e) => {
         e.stopPropagation();
-        data.onSelect(id);
+        data.onSelect(id, e.shiftKey || e.metaKey || e.ctrlKey);
       }}
       style={{
         ...style,
@@ -621,11 +627,12 @@ function toFlowNodes(
     onAddChild: (id: string) => void;
     onDelete: (id: string) => void;
     onToggleComplete: (id: string) => void;
-    onSelect: (id: string) => void;
+    onSelect: (id: string, additive: boolean) => void;
   },
   taskMap?: Map<string, TaskItem>,
-  selectedNodeId?: string | null,
+  selectedNodeIds?: string[] | null,
 ): Node[] {
+  const selectedSet = new Set(selectedNodeIds ?? []);
   return mapNodes.map((n) => {
     const linkedTask = n.taskId && taskMap ? taskMap.get(n.taskId) : undefined;
     return {
@@ -640,7 +647,7 @@ function toFlowNodes(
         url: n.url,
         taskId: n.taskId,
         taskCompleted: linkedTask?.completed ?? false,
-        selected: n.id === selectedNodeId,
+        selected: selectedSet.has(n.id),
         ...callbacks,
       } satisfies MindMapNodeData,
     };
@@ -1225,136 +1232,12 @@ function NodeDetailPanel({
               style={{
                 padding: "10px 0 0",
                 borderTop: "1px solid var(--border-subtle)",
-                display: "flex",
-                flexDirection: "column",
-                gap: 10,
+                fontSize: 11,
+                color: "var(--text-muted)",
               }}
             >
-              <div style={LBL}>Connector from parent</div>
-              <select
-                value={effectiveParentEdgeLineType(node, mapEdgeDefault)}
-                onChange={(e) => {
-                  const v = e.target.value as MindMapEdgeLineType;
-                  onUpdateNode(node.id, {
-                    parentEdgeLineType: v === mapEdgeDefault ? null : v,
-                  });
-                }}
-                style={{
-                  width: "100%",
-                  fontSize: 12,
-                  padding: "6px 8px",
-                  borderRadius: 6,
-                  border: "1px solid var(--border-color)",
-                  background: "var(--bg-tertiary)",
-                  color: "var(--text-primary)",
-                }}
-              >
-                {(Object.keys(EDGE_LINE_LABELS) as MindMapEdgeLineType[]).map((k) => (
-                  <option key={k} value={k}>
-                    {EDGE_LINE_LABELS[k]}
-                  </option>
-                ))}
-              </select>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  fontSize: 12,
-                  color: "var(--text-secondary)",
-                  cursor: "pointer",
-                  userSelect: "none",
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={node.parentEdgeStroke === "dashed"}
-                  onChange={() =>
-                    onUpdateNode(node.id, {
-                      parentEdgeStroke:
-                        node.parentEdgeStroke === "dashed" ? null : "dashed",
-                    })
-                  }
-                />
-                Dashed line
-              </label>
-              <div style={LBL}>Exit from parent (side)</div>
-              {node.taskId ? (
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: "var(--text-secondary)",
-                    padding: "6px 0",
-                  }}
-                >
-                  {LINK_SIDE_LABELS[effectiveLinkSourceSide(node)]} — linked tasks use
-                  the Tasks hierarchy; drag from the same parent to tweak anchors only.
-                </div>
-              ) : (
-                <select
-                  value={effectiveLinkSourceSide(node)}
-                  onChange={(e) => {
-                    const v = e.target.value as MindMapLinkSide;
-                    onUpdateNode(node.id, {
-                      parentLinkSourceSide:
-                        v === DEFAULT_LINK_SOURCE_SIDE ? null : v,
-                    });
-                  }}
-                  style={{
-                    width: "100%",
-                    fontSize: 12,
-                    padding: "6px 8px",
-                    borderRadius: 6,
-                    border: "1px solid var(--border-color)",
-                    background: "var(--bg-tertiary)",
-                    color: "var(--text-primary)",
-                  }}
-                >
-                  {LINK_SIDE_ORDER.map((s) => (
-                    <option key={s} value={s}>
-                      {LINK_SIDE_LABELS[s]}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <div style={LBL}>Enter this node (side)</div>
-              {node.taskId ? (
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: "var(--text-secondary)",
-                    padding: "6px 0",
-                  }}
-                >
-                  {LINK_SIDE_LABELS[effectiveLinkTargetSide(node)]}
-                </div>
-              ) : (
-                <select
-                  value={effectiveLinkTargetSide(node)}
-                  onChange={(e) => {
-                    const v = e.target.value as MindMapLinkSide;
-                    onUpdateNode(node.id, {
-                      parentLinkTargetSide:
-                        v === DEFAULT_LINK_TARGET_SIDE ? null : v,
-                    });
-                  }}
-                  style={{
-                    width: "100%",
-                    fontSize: 12,
-                    padding: "6px 8px",
-                    borderRadius: 6,
-                    border: "1px solid var(--border-color)",
-                    background: "var(--bg-tertiary)",
-                    color: "var(--text-primary)",
-                  }}
-                >
-                  {LINK_SIDE_ORDER.map((s) => (
-                    <option key={s} value={s}>
-                      {LINK_SIDE_LABELS[s]}
-                    </option>
-                  ))}
-                </select>
-              )}
+              Click the connector arrow on the canvas to edit its line style and
+              anchor sides.
             </div>
           )}
 
@@ -1560,23 +1443,354 @@ function NodeDetailPanel({
   );
 }
 
+/* ─── Detail panel for a selected connector (arrow) ─── */
+
+function EdgeDetailPanel({
+  childNode,
+  parentNode,
+  mapDefaultEdgeLineType: mapEdgeDefault,
+  onUpdateNode,
+  onReverse,
+  onDelete,
+  onClose,
+}: {
+  childNode: MindMapNode;
+  parentNode: MindMapNode | null;
+  mapDefaultEdgeLineType: MindMapEdgeLineType;
+  onUpdateNode: (id: string, patch: Partial<MindMapNode>) => void;
+  onReverse: () => void;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
+  const LBL = { fontSize: 11, color: "var(--text-muted)", marginBottom: 4 } as const;
+  const isLinkedTask = Boolean(childNode.taskId);
+  const color = parentNode ? nodeOutlineColor(parentNode) : nodeOutlineColor(childNode);
+
+  return (
+    <div
+      style={{
+        width: 300,
+        flexShrink: 0,
+        borderLeft: "1px solid var(--border-color)",
+        background: "var(--bg-secondary)",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "12px 14px",
+          borderBottom: "1px solid var(--border-color)",
+        }}
+      >
+        <span
+          style={{
+            color: "var(--text-primary)",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 13,
+            fontWeight: 600,
+          }}
+        >
+          Connector Details
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          style={{
+            background: "none",
+            border: "none",
+            color: "var(--text-muted)",
+            cursor: "pointer",
+            fontSize: 18,
+            lineHeight: 1,
+            padding: 0,
+          }}
+        >
+          &times;
+        </button>
+      </div>
+
+      <div
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          padding: "12px 14px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 12,
+            color: "var(--text-secondary)",
+          }}
+        >
+          <span
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: "50%",
+              background: color,
+              flexShrink: 0,
+            }}
+          />
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {(parentNode?.label || "Untitled")} → {(childNode.label || "Untitled")}
+          </span>
+        </div>
+
+        <div>
+          <div style={LBL}>Line style</div>
+          <select
+            value={effectiveParentEdgeLineType(childNode, mapEdgeDefault)}
+            onChange={(e) => {
+              const v = e.target.value as MindMapEdgeLineType;
+              onUpdateNode(childNode.id, {
+                parentEdgeLineType: v === mapEdgeDefault ? null : v,
+              });
+            }}
+            style={{
+              width: "100%",
+              fontSize: 12,
+              padding: "6px 8px",
+              borderRadius: 6,
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-tertiary)",
+              color: "var(--text-primary)",
+            }}
+          >
+            {(Object.keys(EDGE_LINE_LABELS) as MindMapEdgeLineType[]).map((k) => (
+              <option key={k} value={k}>
+                {EDGE_LINE_LABELS[k]}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 12,
+            color: "var(--text-secondary)",
+            cursor: "pointer",
+            userSelect: "none",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={childNode.parentEdgeStroke === "dashed"}
+            onChange={() =>
+              onUpdateNode(childNode.id, {
+                parentEdgeStroke:
+                  childNode.parentEdgeStroke === "dashed" ? null : "dashed",
+              })
+            }
+          />
+          Dashed line
+        </label>
+
+        <div>
+          <div style={LBL}>Exit from parent (side)</div>
+          {isLinkedTask ? (
+            <div style={{ fontSize: 12, color: "var(--text-secondary)", padding: "6px 0" }}>
+              {LINK_SIDE_LABELS[effectiveLinkSourceSide(childNode)]} — linked tasks use
+              the Tasks hierarchy; drag from the same parent to tweak anchors only.
+            </div>
+          ) : (
+            <select
+              value={effectiveLinkSourceSide(childNode)}
+              onChange={(e) => {
+                const v = e.target.value as MindMapLinkSide;
+                onUpdateNode(childNode.id, {
+                  parentLinkSourceSide: v === DEFAULT_LINK_SOURCE_SIDE ? null : v,
+                });
+              }}
+              style={{
+                width: "100%",
+                fontSize: 12,
+                padding: "6px 8px",
+                borderRadius: 6,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-tertiary)",
+                color: "var(--text-primary)",
+              }}
+            >
+              {LINK_SIDE_ORDER.map((s) => (
+                <option key={s} value={s}>
+                  {LINK_SIDE_LABELS[s]}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        <div>
+          <div style={LBL}>Enter this node (side)</div>
+          {isLinkedTask ? (
+            <div style={{ fontSize: 12, color: "var(--text-secondary)", padding: "6px 0" }}>
+              {LINK_SIDE_LABELS[effectiveLinkTargetSide(childNode)]}
+            </div>
+          ) : (
+            <select
+              value={effectiveLinkTargetSide(childNode)}
+              onChange={(e) => {
+                const v = e.target.value as MindMapLinkSide;
+                onUpdateNode(childNode.id, {
+                  parentLinkTargetSide: v === DEFAULT_LINK_TARGET_SIDE ? null : v,
+                });
+              }}
+              style={{
+                width: "100%",
+                fontSize: 12,
+                padding: "6px 8px",
+                borderRadius: 6,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-tertiary)",
+                color: "var(--text-primary)",
+              }}
+            >
+              {LINK_SIDE_ORDER.map((s) => (
+                <option key={s} value={s}>
+                  {LINK_SIDE_LABELS[s]}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        <button
+          type="button"
+          onClick={() =>
+            onUpdateNode(childNode.id, {
+              parentEdgeLineType: null,
+              parentEdgeStroke: null,
+              parentLinkSourceSide: null,
+              parentLinkTargetSide: null,
+            })
+          }
+          style={{
+            fontSize: 12,
+            padding: "6px 10px",
+            borderRadius: 6,
+            border: "1px solid var(--border-color)",
+            background: "var(--bg-tertiary)",
+            color: "var(--text-secondary)",
+            cursor: "pointer",
+            alignSelf: "flex-start",
+          }}
+        >
+          Reset connector to default
+        </button>
+
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            padding: "10px 0 0",
+            borderTop: "1px solid var(--border-subtle)",
+          }}
+        >
+          <button
+            type="button"
+            onClick={onReverse}
+            title="Swap the arrow's direction"
+            style={{
+              flex: 1,
+              fontSize: 12,
+              padding: "6px 10px",
+              borderRadius: 6,
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-tertiary)",
+              color: "var(--accent-blue)",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+            }}
+          >
+            <span style={{ display: "inline-flex", transform: "rotate(135deg)" }}>
+              <ArrowDownRight size={12} />
+            </span>
+            Reverse
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            title="Remove this connector"
+            style={{
+              flex: 1,
+              fontSize: 12,
+              padding: "6px 10px",
+              borderRadius: 6,
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-tertiary)",
+              color: "var(--accent-red)",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+            }}
+          >
+            <Trash size={12} />
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─── Main view ─── */
 
 export default function MindMapsView() {
   const searchParams = useSearchParams();
   const initialMapId = searchParams.get("mapId");
   const rootTaskParam = searchParams.get("rootTask");
-  const { maps, upsertMap, deleteMap, loading: mapsLoading } = useMindMaps();
+  const { maps, upsertMap: upsertMapRaw, deleteMap, loading: mapsLoading } = useMindMaps();
   const { tasks, updateTask, loading: tasksLoading } = useTasks();
 
   const [selectedMapId, setSelectedMapId] = useState<string | null>(initialMapId);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  /** Ordered list of selected node ids: plain click replaces it (max 1); shift/cmd-click adds/removes. */
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [connectNote, setConnectNote] = useState<string | null>(null);
+
+  /** Undo/redo history (node-array snapshots), scoped to the currently open map. */
+  const [undoStack, setUndoStack] = useState<MindMapNode[][]>([]);
+  const [redoStack, setRedoStack] = useState<MindMapNode[][]>([]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState<Edge>([]);
   const [addKind, setAddKind] = useState<MindMapNodeKind>("idea");
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initializedRef = useRef(false);
+  /** While dragging a node that's part of a multi-selection, tracks the group so the rest can be dragged along. */
+  const dragGroupRef = useRef<{ ids: string[]; last: { x: number; y: number } } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // Google Doc sync panel
+  const [googleDocPanelOpen, setGoogleDocPanelOpen] = useState(false);
+  const [googleDocUrlInput, setGoogleDocUrlInput] = useState("");
+  const [googleDocSaving, setGoogleDocSaving] = useState(false);
+  const [googleDocPushing, setGoogleDocPushing] = useState(false);
+  const [googleDocMessage, setGoogleDocMessage] = useState<{ text: string; error: boolean } | null>(null);
+  /** Mirrors `googleDocPushing` for reads inside the auto-sync interval, which must not close over stale state. */
+  const googleDocPushingRef = useRef(false);
+  /** Per-map `updatedAt` value as of the last successful push, used to detect "changes since last sync". */
+  const lastAutoSyncedAtRef = useRef<Map<string, string>>(new Map());
 
   const selectedMap = useMemo(
     () => maps.find((m) => m.id === selectedMapId) ?? null,
@@ -1588,6 +1802,9 @@ export default function MindMapsView() {
     [tasks],
   );
 
+  /** Single-node id, only meaningful when exactly one node is selected (drives the detail panel). */
+  const selectedNodeId = selectedNodeIds.length === 1 ? selectedNodeIds[0] : null;
+
   const selectedNode = useMemo(
     () => selectedMap?.nodes.find((n) => n.id === selectedNodeId) ?? null,
     [selectedMap, selectedNodeId],
@@ -1598,12 +1815,226 @@ export default function MindMapsView() {
     [selectedNode, taskMap],
   );
 
+  const selectedEdge = useMemo(
+    () => edges.find((e) => e.id === selectedEdgeId) ?? null,
+    [edges, selectedEdgeId],
+  );
+
+  const selectedEdgeChildNode = useMemo(
+    () => (selectedEdge ? selectedMap?.nodes.find((n) => n.id === selectedEdge.target) ?? null : null),
+    [selectedEdge, selectedMap],
+  );
+
+  const selectedEdgeParentNode = useMemo(
+    () => (selectedEdge ? selectedMap?.nodes.find((n) => n.id === selectedEdge.source) ?? null : null),
+    [selectedEdge, selectedMap],
+  );
+
+  /** Edges with the selected connector highlighted (thicker stroke); purely visual. */
+  const displayEdges = useMemo(
+    () =>
+      selectedEdgeId
+        ? edges.map((e) =>
+            e.id === selectedEdgeId
+              ? { ...e, style: { ...e.style, strokeWidth: 4 } }
+              : e,
+          )
+        : edges,
+    [edges, selectedEdgeId],
+  );
+
   const mapEdgeDefault = mapDefaultEdgeLineType(selectedMap);
 
   /* ─── callbacks wired into nodes ─── */
 
   const currentMapRef = useRef<MindMapDocument | null>(null);
   currentMapRef.current = selectedMap;
+
+  /** Latest node callbacks, kept in sync below; lets undo/redo rebuild flow nodes without a definition-order issue. */
+  const fullCallbacksRef = useRef<{
+    onLabelChange: (id: string, label: string) => void;
+    onBodyChange: (id: string, body: string) => void;
+    onAddChild: (id: string) => void;
+    onDelete: (id: string) => void;
+    onToggleComplete: (id: string) => void;
+    onSelect: (id: string, additive: boolean) => void;
+  }>({
+    onLabelChange: () => {},
+    onBodyChange: () => {},
+    onAddChild: () => {},
+    onDelete: () => {},
+    onToggleComplete: () => {},
+    onSelect: () => {},
+  });
+
+  /* ─── Undo/redo history ─── */
+
+  /** Clear history whenever the open map changes, so undo never crosses maps. */
+  useEffect(() => {
+    setUndoStack([]);
+    setRedoStack([]);
+  }, [selectedMapId]);
+
+  /** Close the Google Doc panel and reset its transient state whenever the open map changes. */
+  useEffect(() => {
+    setGoogleDocPanelOpen(false);
+    setGoogleDocMessage(null);
+  }, [selectedMapId]);
+
+  /**
+   * Wraps the raw `upsertMap` to record the pre-change node snapshot for undo,
+   * unless the caller is itself an undo/redo action (`skipHistory`).
+   */
+  const upsertMap = useCallback(
+    (doc: MindMapDocument, opts?: { skipHistory?: boolean }) => {
+      if (!opts?.skipHistory && doc.id === selectedMapId) {
+        const before = maps.find((m) => m.id === doc.id);
+        if (before) {
+          setUndoStack((s) => [...s, before.nodes].slice(-MAX_HISTORY));
+          setRedoStack([]);
+        }
+      }
+      upsertMapRaw(doc);
+    },
+    [maps, selectedMapId, upsertMapRaw],
+  );
+
+  const handleGoogleDocSaveUrl = useCallback(() => {
+    const map = currentMapRef.current;
+    if (!map) return;
+    setGoogleDocSaving(true);
+    setGoogleDocMessage(null);
+    const trimmed = googleDocUrlInput.trim();
+    upsertMap({ ...map, googleDocUrl: trimmed || null, updatedAt: new Date().toISOString() });
+    setGoogleDocSaving(false);
+    setGoogleDocMessage({ text: trimmed ? "Saved." : "Cleared.", error: false });
+  }, [googleDocUrlInput, upsertMap]);
+
+  /**
+   * Pushes `map`'s outline to its linked Google Doc. Shared by the manual "Push to Doc" button and
+   * the auto-sync interval below; `googleDocPushingRef` guards against overlapping requests from either.
+   */
+  const pushMapToGoogleDoc = useCallback(
+    async (map: MindMapDocument, opts?: { silent?: boolean }): Promise<void> => {
+      if (googleDocPushingRef.current) return;
+      googleDocPushingRef.current = true;
+      setGoogleDocPushing(true);
+      if (!opts?.silent) setGoogleDocMessage(null);
+      try {
+        const res = await fetch("/api/mind-maps/google-doc/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mapId: map.id }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setGoogleDocMessage({ text: typeof data.error === "string" ? data.error : "Sync failed.", error: true });
+          return;
+        }
+        lastAutoSyncedAtRef.current.set(map.id, map.updatedAt);
+        setGoogleDocMessage({
+          text: `${opts?.silent ? "Auto-synced" : "Pushed"} to "${data.documentTitle ?? "Google Doc"}".`,
+          error: false,
+        });
+      } catch {
+        setGoogleDocMessage({ text: "Network error.", error: true });
+      } finally {
+        googleDocPushingRef.current = false;
+        setGoogleDocPushing(false);
+      }
+    },
+    [],
+  );
+
+  const handleGoogleDocPush = useCallback(async () => {
+    const map = currentMapRef.current;
+    if (!map) return;
+    await pushMapToGoogleDoc(map);
+  }, [pushMapToGoogleDoc]);
+
+  const handleGoogleDocAutoSyncToggle = useCallback(
+    (checked: boolean) => {
+      const map = currentMapRef.current;
+      if (!map) return;
+      upsertMap({ ...map, googleDocAutoSync: checked, updatedAt: new Date().toISOString() });
+    },
+    [upsertMap],
+  );
+
+  /** Every 30s, push the open map to its Google Doc if auto-sync is on and it changed since the last push. */
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const map = currentMapRef.current;
+      if (!map) return;
+      if (!map.googleDocAutoSync) return;
+      if (!(map.googleDocUrl ?? "").trim()) return;
+      if (googleDocPushingRef.current) return;
+      if (lastAutoSyncedAtRef.current.get(map.id) === map.updatedAt) return;
+      void pushMapToGoogleDoc(map, { silent: true });
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [pushMapToGoogleDoc]);
+
+  const undo = useCallback(() => {
+    if (undoStack.length === 0 || !currentMapRef.current) return;
+    const map = currentMapRef.current;
+    const prevNodes = undoStack[undoStack.length - 1];
+    const updated: MindMapDocument = {
+      ...map,
+      nodes: prevNodes,
+      updatedAt: new Date().toISOString(),
+    };
+    currentMapRef.current = updated;
+    setUndoStack((s) => s.slice(0, -1));
+    setRedoStack((r) => [...r, map.nodes].slice(-MAX_HISTORY));
+    upsertMapRaw(updated);
+    setNodes(toFlowNodes(prevNodes, fullCallbacksRef.current, taskMap, selectedNodeIds));
+    setEdges(toFlowEdges(prevNodes, mapDefaultEdgeLineType(updated)));
+    setSelectedNodeIds([]);
+    setSelectedEdgeId(null);
+  }, [undoStack, taskMap, selectedNodeIds, setNodes, setEdges, upsertMapRaw]);
+
+  const redo = useCallback(() => {
+    if (redoStack.length === 0 || !currentMapRef.current) return;
+    const map = currentMapRef.current;
+    const nextNodes = redoStack[redoStack.length - 1];
+    const updated: MindMapDocument = {
+      ...map,
+      nodes: nextNodes,
+      updatedAt: new Date().toISOString(),
+    };
+    currentMapRef.current = updated;
+    setRedoStack((s) => s.slice(0, -1));
+    setUndoStack((u) => [...u, map.nodes].slice(-MAX_HISTORY));
+    upsertMapRaw(updated);
+    setNodes(toFlowNodes(nextNodes, fullCallbacksRef.current, taskMap, selectedNodeIds));
+    setEdges(toFlowEdges(nextNodes, mapDefaultEdgeLineType(updated)));
+    setSelectedNodeIds([]);
+    setSelectedEdgeId(null);
+  }, [redoStack, taskMap, selectedNodeIds, setNodes, setEdges, upsertMapRaw]);
+
+  /** Ctrl/Cmd+Z to undo, Ctrl/Cmd+Shift+Z (or Ctrl+Y) to redo — ignored while typing. */
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const key = e.key.toLowerCase();
+      if (key === "z" && e.shiftKey) {
+        e.preventDefault();
+        redo();
+      } else if (key === "z") {
+        e.preventDefault();
+        undo();
+      } else if (key === "y") {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [undo, redo]);
 
   const onEdgesChange = useCallback(
     (changes: EdgeChange[]) => {
@@ -1656,6 +2087,86 @@ export default function MindMapsView() {
     return currentMapRef.current?.nodes ?? [];
   }, []);
 
+  /** Persists a full node-position update and reflects it on the canvas immediately. */
+  const applyNodePositions = useCallback(
+    (updatedNodes: MindMapNode[], changedIds: Set<string>) => {
+      const map = currentMapRef.current;
+      if (!map) return;
+      const updated = { ...map, nodes: updatedNodes, updatedAt: new Date().toISOString() };
+      currentMapRef.current = updated;
+      upsertMap(updated);
+      setNodes((nds) =>
+        nds.map((nd) => {
+          if (!changedIds.has(nd.id)) return nd;
+          const mn = updatedNodes.find((n) => n.id === nd.id);
+          return mn ? { ...nd, position: { x: mn.x, y: mn.y } } : nd;
+        }),
+      );
+    },
+    [upsertMap, setNodes],
+  );
+
+  /** Aligns all selected nodes on one axis (average of their current positions). */
+  const alignSelectedNodes = useCallback(
+    (axis: "horizontal" | "vertical") => {
+      if (selectedNodeIds.length < 2) return;
+      const mapNodes = getLatestMapNodes();
+      const selectedSet = new Set(selectedNodeIds);
+      const selected = mapNodes.filter((n) => selectedSet.has(n.id));
+      if (selected.length < 2) return;
+      if (axis === "horizontal") {
+        const avgY = Math.round(
+          selected.reduce((sum, n) => sum + n.y, 0) / selected.length,
+        );
+        const next = mapNodes.map((n) =>
+          selectedSet.has(n.id) ? { ...n, y: avgY } : n,
+        );
+        applyNodePositions(next, selectedSet);
+      } else {
+        const avgX = Math.round(
+          selected.reduce((sum, n) => sum + n.x, 0) / selected.length,
+        );
+        const next = mapNodes.map((n) =>
+          selectedSet.has(n.id) ? { ...n, x: avgX } : n,
+        );
+        applyNodePositions(next, selectedSet);
+      }
+    },
+    [selectedNodeIds, getLatestMapNodes, applyNodePositions],
+  );
+
+  /** Spaces 3+ selected nodes evenly along whichever axis currently has the larger spread. */
+  const distributeSelectedNodes = useCallback(() => {
+    if (selectedNodeIds.length < 3) return;
+    const mapNodes = getLatestMapNodes();
+    const selectedSet = new Set(selectedNodeIds);
+    const selected = mapNodes.filter((n) => selectedSet.has(n.id));
+    if (selected.length < 3) return;
+    const xs = selected.map((n) => n.x);
+    const ys = selected.map((n) => n.y);
+    const spreadX = Math.max(...xs) - Math.min(...xs);
+    const spreadY = Math.max(...ys) - Math.min(...ys);
+    const axis: "x" | "y" = spreadX >= spreadY ? "x" : "y";
+    const sorted = [...selected].sort((a, b) =>
+      axis === "x" ? a.x - b.x : a.y - b.y,
+    );
+    const first = sorted[0];
+    const last = sorted[sorted.length - 1];
+    const span = axis === "x" ? last.x - first.x : last.y - first.y;
+    const step = span / (sorted.length - 1);
+    const positions = new Map<string, number>();
+    sorted.forEach((n, i) => {
+      const base = axis === "x" ? first.x : first.y;
+      positions.set(n.id, Math.round(base + step * i));
+    });
+    const next = mapNodes.map((n) => {
+      const v = positions.get(n.id);
+      if (v == null) return n;
+      return axis === "x" ? { ...n, x: v } : { ...n, y: v };
+    });
+    applyNodePositions(next, selectedSet);
+  }, [selectedNodeIds, getLatestMapNodes, applyNodePositions]);
+
   const onLabelChange = useCallback(
     (id: string, label: string) => {
       const prev = getLatestMapNodes();
@@ -1706,8 +2217,23 @@ export default function MindMapsView() {
     [getLatestMapNodes, taskMap, updateTask],
   );
 
-  const onSelectNode = useCallback((nodeId: string) => {
-    setSelectedNodeId((prev) => (prev === nodeId ? null : nodeId));
+  const onSelectNode = useCallback((nodeId: string, additive: boolean) => {
+    setSelectedEdgeId(null);
+    setConnectNote(null);
+    setSelectedNodeIds((prev) => {
+      if (additive) {
+        return prev.includes(nodeId)
+          ? prev.filter((id) => id !== nodeId)
+          : [...prev, nodeId];
+      }
+      return prev.length === 1 && prev[0] === nodeId ? [] : [nodeId];
+    });
+  }, []);
+
+  const onEdgeClick = useCallback((event: React.MouseEvent, edge: Edge) => {
+    event.stopPropagation();
+    setSelectedNodeIds([]);
+    setSelectedEdgeId((prev) => (prev === edge.id ? null : edge.id));
   }, []);
 
   const nodeCallbacks = useMemo(
@@ -1746,7 +2272,7 @@ export default function MindMapsView() {
       const cbs = { ...nodeCallbacks, onAddChild, onDelete: onDeleteNode };
       setNodes((nds) => [
         ...nds,
-        ...toFlowNodes([child], cbs, taskMap, selectedNodeId),
+        ...toFlowNodes([child], cbs, taskMap, selectedNodeIds),
       ]);
       const md = mapDefaultEdgeLineType(currentMapRef.current);
       setEdges((eds) => [...eds, ...toFlowEdges([child], md)]);
@@ -1760,7 +2286,7 @@ export default function MindMapsView() {
       setEdges,
       taskMap,
       nodeCallbacks,
-      selectedNodeId,
+      selectedNodeIds,
     ],
   );
 
@@ -1786,19 +2312,26 @@ export default function MindMapsView() {
         currentMapRef.current = updated;
         upsertMap(updated);
       }
-      if (selectedNodeId && toRemove.has(selectedNodeId)) setSelectedNodeId(null);
+      setSelectedNodeIds((prev) => prev.filter((nid) => !toRemove.has(nid)));
+      setSelectedEdgeId((prev) => {
+        if (!prev) return prev;
+        const e = edges.find((e) => e.id === prev);
+        if (e && (toRemove.has(e.source) || toRemove.has(e.target))) return null;
+        return prev;
+      });
       setNodes((nds) => nds.filter((n) => !toRemove.has(n.id)));
       setEdges((eds) =>
         eds.filter((e) => !toRemove.has(e.source) && !toRemove.has(e.target)),
       );
     },
-    [getLatestMapNodes, upsertMap, setNodes, setEdges, selectedNodeId],
+    [getLatestMapNodes, upsertMap, setNodes, setEdges, edges],
   );
 
   const fullCallbacks = useMemo(
     () => ({ ...nodeCallbacks, onAddChild, onDelete: onDeleteNode }),
     [nodeCallbacks, onAddChild, onDeleteNode],
   );
+  fullCallbacksRef.current = fullCallbacks;
 
   /* ─── Sync flow nodes when selected map changes ─── */
 
@@ -1808,10 +2341,10 @@ export default function MindMapsView() {
       setEdges([]);
       return;
     }
-    setNodes(toFlowNodes(selectedMap.nodes, fullCallbacks, taskMap, selectedNodeId));
+    setNodes(toFlowNodes(selectedMap.nodes, fullCallbacks, taskMap, selectedNodeIds));
     setEdges(toFlowEdges(selectedMap.nodes, mapDefaultEdgeLineType(selectedMap)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedMapId, selectedMap?.updatedAt, selectedMap?.nodes.length, taskMap, selectedNodeId]);
+  }, [selectedMapId, selectedMap?.updatedAt, selectedMap?.nodes.length, taskMap, selectedNodeIds]);
 
   /* ─── Handle initial deep links ─── */
 
@@ -1849,15 +2382,55 @@ export default function MindMapsView() {
 
   /* ─── Persist position changes on drag end ─── */
 
+  /** When starting a drag on a node that's part of a multi-selection, remember the group so it moves together. */
+  const onNodeDragStart = useCallback(
+    (_: React.MouseEvent, node: Node) => {
+      dragGroupRef.current =
+        selectedNodeIds.length > 1 && selectedNodeIds.includes(node.id)
+          ? { ids: selectedNodeIds, last: { x: node.position.x, y: node.position.y } }
+          : null;
+    },
+    [selectedNodeIds],
+  );
+
+  /** Mirrors the dragged node's movement onto the rest of the selected group in real time. */
+  const onNodeDrag = useCallback(
+    (_: React.MouseEvent, node: Node) => {
+      const group = dragGroupRef.current;
+      if (!group || !group.ids.includes(node.id)) return;
+      const dx = node.position.x - group.last.x;
+      const dy = node.position.y - group.last.y;
+      if (dx === 0 && dy === 0) return;
+      group.last = { x: node.position.x, y: node.position.y };
+      const otherIds = new Set(group.ids.filter((id) => id !== node.id));
+      setNodes((nds) =>
+        nds.map((n) =>
+          otherIds.has(n.id)
+            ? { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
+            : n,
+        ),
+      );
+    },
+    [setNodes],
+  );
+
   const onNodeDragStop = useCallback(
     (_: React.MouseEvent, node: Node) => {
-      const mapNodes = getLatestMapNodes();
-      const next = mapNodes.map((n) =>
-        n.id === node.id ? { ...n, x: node.position.x, y: node.position.y } : n,
+      const group = dragGroupRef.current;
+      const groupIds = new Set(
+        group && group.ids.includes(node.id) ? group.ids : [node.id],
       );
+      dragGroupRef.current = null;
+      const latestPositions = new Map(nodes.map((n) => [n.id, n.position]));
+      const mapNodes = getLatestMapNodes();
+      const next = mapNodes.map((n) => {
+        if (!groupIds.has(n.id)) return n;
+        const pos = n.id === node.id ? node.position : latestPositions.get(n.id);
+        return pos ? { ...n, x: pos.x, y: pos.y } : n;
+      });
       scheduleSave(next);
     },
-    [getLatestMapNodes, scheduleSave],
+    [nodes, getLatestMapNodes, scheduleSave],
   );
 
   const onConnect = useCallback(
@@ -1952,6 +2525,33 @@ export default function MindMapsView() {
     return true;
   }, []);
 
+  /** Connects the two currently-selected nodes with an arrow (first selected → second selected). */
+  const connectSelectedNodes = useCallback(() => {
+    if (selectedNodeIds.length !== 2) return;
+    const [sourceId, targetId] = selectedNodeIds;
+    const mapNodes = getLatestMapNodes();
+    const targetNode = mapNodes.find((n) => n.id === targetId);
+    if (!targetNode) return;
+    if (
+      targetNode.taskId &&
+      targetNode.parentId &&
+      targetNode.parentId !== sourceId
+    ) {
+      setConnectNote(
+        "This node's connector follows the Tasks hierarchy and can't be reassigned here.",
+      );
+      return;
+    }
+    setConnectNote(null);
+    onConnect({
+      source: sourceId,
+      target: targetId,
+      sourceHandle: sourceHandleId(DEFAULT_LINK_SOURCE_SIDE),
+      targetHandle: targetHandleId(DEFAULT_LINK_TARGET_SIDE),
+    });
+    setSelectedNodeIds([]);
+  }, [selectedNodeIds, getLatestMapNodes, onConnect]);
+
   /* ─── Map CRUD ─── */
 
   const createMap = useCallback(() => {
@@ -1980,7 +2580,7 @@ export default function MindMapsView() {
       deleteMap(id);
       if (selectedMapId === id) {
         setSelectedMapId(null);
-        setSelectedNodeId(null);
+        setSelectedNodeIds([]);
       }
     },
     [deleteMap, selectedMapId],
@@ -2002,9 +2602,9 @@ export default function MindMapsView() {
     upsertMap(updated);
     setNodes((nds) => [
       ...nds,
-      ...toFlowNodes([rootNode], fullCallbacks, taskMap, selectedNodeId),
+      ...toFlowNodes([rootNode], fullCallbacks, taskMap, selectedNodeIds),
     ]);
-  }, [selectedMap, addKind, upsertMap, setNodes, fullCallbacks, taskMap, selectedNodeId]);
+  }, [selectedMap, addKind, upsertMap, setNodes, fullCallbacks, taskMap, selectedNodeIds]);
 
   const refreshFromTasks = useCallback(() => {
     if (!selectedMap?.anchorTaskId) return;
@@ -2019,9 +2619,9 @@ export default function MindMapsView() {
       updatedAt: new Date().toISOString(),
     };
     upsertMap(updated);
-    setNodes(toFlowNodes(merged, fullCallbacks, taskMap, selectedNodeId));
+    setNodes(toFlowNodes(merged, fullCallbacks, taskMap, selectedNodeIds));
     setEdges(toFlowEdges(merged, mapDefaultEdgeLineType(updated)));
-  }, [selectedMap, tasks, taskMap, upsertMap, setNodes, setEdges, fullCallbacks, selectedNodeId]);
+  }, [selectedMap, tasks, taskMap, upsertMap, setNodes, setEdges, fullCallbacks, selectedNodeIds]);
 
   /* ─── Detail panel handlers ─── */
 
@@ -2080,6 +2680,7 @@ export default function MindMapsView() {
         );
       }
       if (
+        "parentId" in patch ||
         "parentEdgeLineType" in patch ||
         "parentEdgeStroke" in patch ||
         "parentLinkSourceSide" in patch ||
@@ -2094,6 +2695,67 @@ export default function MindMapsView() {
     },
     [getLatestMapNodes, upsertMap, setNodes, setEdges],
   );
+
+  /** Detaches the currently-selected connector's child node from its parent (removes the arrow). */
+  const deleteSelectedEdge = useCallback(() => {
+    if (!selectedEdgeChildNode) return;
+    onUpdateNode(selectedEdgeChildNode.id, {
+      parentId: null,
+      parentEdgeLineType: null,
+      parentEdgeStroke: null,
+      parentLinkSourceSide: null,
+      parentLinkTargetSide: null,
+    });
+    setSelectedEdgeId(null);
+  }, [selectedEdgeChildNode, onUpdateNode]);
+
+  /** Flips the currently-selected connector's direction (child becomes the parent, and vice versa). */
+  const reverseSelectedEdge = useCallback(() => {
+    if (!selectedEdgeParentNode || !selectedEdgeChildNode) return;
+    const parent = selectedEdgeParentNode;
+    const child = selectedEdgeChildNode;
+    if (parent.taskId || child.taskId) {
+      setConnectNote(
+        "This connector follows the Tasks hierarchy and can't be reversed here.",
+      );
+      return;
+    }
+    setConnectNote(null);
+    const newExitSide = effectiveLinkTargetSide(child);
+    const newEnterSide = effectiveLinkSourceSide(child);
+    const mapNodes = getLatestMapNodes();
+    const next = mapNodes.map((n) => {
+      if (n.id === parent.id) {
+        return {
+          ...n,
+          parentId: child.id,
+          parentEdgeLineType: child.parentEdgeLineType ?? null,
+          parentEdgeStroke: child.parentEdgeStroke ?? null,
+          parentLinkSourceSide: newExitSide,
+          parentLinkTargetSide: newEnterSide,
+        };
+      }
+      if (n.id === child.id) {
+        return {
+          ...n,
+          parentId: null,
+          parentEdgeLineType: null,
+          parentEdgeStroke: null,
+          parentLinkSourceSide: null,
+          parentLinkTargetSide: null,
+        };
+      }
+      return n;
+    });
+    const map = currentMapRef.current;
+    if (map) {
+      const updated = { ...map, nodes: next, updatedAt: new Date().toISOString() };
+      currentMapRef.current = updated;
+      upsertMap(updated);
+    }
+    setEdges(toFlowEdges(next, mapDefaultEdgeLineType(currentMapRef.current)));
+    setSelectedEdgeId(`e-${child.id}-${parent.id}`);
+  }, [selectedEdgeParentNode, selectedEdgeChildNode, getLatestMapNodes, upsertMap, setEdges]);
 
   const onDetailToggleComplete = useCallback(() => {
     if (!selectedNode?.taskId) return;
@@ -2118,7 +2780,7 @@ export default function MindMapsView() {
     if (!next) return "Add/link the parent task node first.";
     if (next === selectedMap) return "All subtasks are already on this map.";
     upsertMap(next);
-    setNodes(toFlowNodes(next.nodes, fullCallbacks, taskMap, selectedNode.id));
+    setNodes(toFlowNodes(next.nodes, fullCallbacks, taskMap, [selectedNode.id]));
     setEdges(toFlowEdges(next.nodes, mapDefaultEdgeLineType(next)));
     return "Subtasks imported.";
   }, [selectedMap, selectedNode, tasks, upsertMap, setNodes, setEdges, fullCallbacks, taskMap]);
@@ -2171,7 +2833,7 @@ export default function MindMapsView() {
                 key={m.id}
                 onClick={() => {
                   setSelectedMapId(m.id);
-                  setSelectedNodeId(null);
+                  setSelectedNodeIds([]);
                 }}
                 style={{
                   padding: "8px 8px",
@@ -2346,6 +3008,52 @@ export default function MindMapsView() {
                 </button>
               )}
 
+              <button
+                type="button"
+                onClick={undo}
+                disabled={undoStack.length === 0}
+                title="Undo (Ctrl/Cmd+Z)"
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 6,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-secondary)",
+                  color: undoStack.length === 0 ? "var(--text-muted)" : "var(--text-primary)",
+                  cursor: undoStack.length === 0 ? "default" : "pointer",
+                  opacity: undoStack.length === 0 ? 0.5 : 1,
+                  padding: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Undo size={14} />
+              </button>
+
+              <button
+                type="button"
+                onClick={redo}
+                disabled={redoStack.length === 0}
+                title="Redo (Ctrl/Cmd+Shift+Z)"
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 6,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-secondary)",
+                  color: redoStack.length === 0 ? "var(--text-muted)" : "var(--text-primary)",
+                  cursor: redoStack.length === 0 ? "default" : "pointer",
+                  opacity: redoStack.length === 0 ? 0.5 : 1,
+                  padding: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Redo size={14} />
+              </button>
+
               <select
                 value={addKind}
                 onChange={(e) => setAddKind(e.target.value as MindMapNodeKind)}
@@ -2407,6 +3115,95 @@ export default function MindMapsView() {
                 <Plus size={12} /> Add node
               </button>
 
+              {selectedNodeIds.length === 2 && (
+                <button
+                  type="button"
+                  onClick={connectSelectedNodes}
+                  title="Draw an arrow from the first selected node to the second"
+                  style={{
+                    fontSize: 12,
+                    padding: "4px 10px",
+                    borderRadius: 6,
+                    border: "1px solid var(--accent-blue)",
+                    background: "var(--bg-secondary)",
+                    color: "var(--accent-blue)",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
+                >
+                  <ArrowDownRight size={12} /> Connect selected
+                </button>
+              )}
+
+              {selectedNodeIds.length >= 2 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => alignSelectedNodes("horizontal")}
+                    title="Align selected nodes in a horizontal row (same height)"
+                    style={{
+                      fontSize: 12,
+                      padding: "4px 10px",
+                      borderRadius: 6,
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-secondary)",
+                      color: "var(--text-primary)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Align horizontal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => alignSelectedNodes("vertical")}
+                    title="Align selected nodes in a vertical column (same position left-right)"
+                    style={{
+                      fontSize: 12,
+                      padding: "4px 10px",
+                      borderRadius: 6,
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-secondary)",
+                      color: "var(--text-primary)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Align vertical
+                  </button>
+                </>
+              )}
+
+              {selectedNodeIds.length >= 3 && (
+                <button
+                  type="button"
+                  onClick={distributeSelectedNodes}
+                  title="Space the selected nodes evenly"
+                  style={{
+                    fontSize: 12,
+                    padding: "4px 10px",
+                    borderRadius: 6,
+                    border: "1px solid var(--border-color)",
+                    background: "var(--bg-secondary)",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                  }}
+                >
+                  Space evenly
+                </button>
+              )}
+
+              {selectedNodeIds.length === 1 && (
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  Shift-click another node to connect or align
+                </span>
+              )}
+
               {selectedMap.anchorTaskId && (
                 <button
                   type="button"
@@ -2424,15 +3221,204 @@ export default function MindMapsView() {
                   Refresh from tasks
                 </button>
               )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setGoogleDocUrlInput(selectedMap.googleDocUrl ?? "");
+                  setGoogleDocMessage(null);
+                  setGoogleDocPanelOpen((o) => !o);
+                }}
+                title="Sync this map's outline into a Google Doc"
+                style={{
+                  fontSize: 12,
+                  padding: "4px 10px",
+                  borderRadius: 6,
+                  border: `1px solid ${googleDocPanelOpen ? "var(--accent-blue)" : "var(--border-color)"}`,
+                  background: "var(--bg-secondary)",
+                  color: googleDocPanelOpen ? "var(--accent-blue)" : "var(--text-primary)",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                <FileText size={12} /> Google Doc
+              </button>
             </div>
+
+            {googleDocPanelOpen && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 48,
+                  left: sidebarOpen ? 10 : 52,
+                  zIndex: 11,
+                  width: 320,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                  padding: "12px 14px",
+                  borderRadius: 8,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-secondary)",
+                  boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)" }}>
+                    Sync to Google Doc
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setGoogleDocPanelOpen(false)}
+                    style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0 }}
+                  >
+                    &times;
+                  </button>
+                </div>
+                <p style={{ margin: 0, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.4 }}>
+                  Paste the URL of a Google Doc the connected Google account can edit. Pushing writes
+                  this map&rsquo;s outline into a reserved section of that doc, leaving the rest untouched.
+                </p>
+                <input
+                  type="text"
+                  value={googleDocUrlInput}
+                  onChange={(e) => setGoogleDocUrlInput(e.target.value)}
+                  placeholder="https://docs.google.com/document/d/…/edit"
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    padding: "6px 8px",
+                    borderRadius: 6,
+                    border: "1px solid var(--border-color)",
+                    background: "var(--bg-primary)",
+                    color: "var(--text-primary)",
+                    fontSize: 12,
+                  }}
+                />
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    fontSize: 11,
+                    color: "var(--text-secondary)",
+                    cursor: (selectedMap.googleDocUrl ?? "").trim() ? "pointer" : "not-allowed",
+                    opacity: (selectedMap.googleDocUrl ?? "").trim() ? 1 : 0.6,
+                  }}
+                  title={!(selectedMap.googleDocUrl ?? "").trim() ? "Save a Doc URL first" : undefined}
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!selectedMap.googleDocAutoSync}
+                    disabled={!(selectedMap.googleDocUrl ?? "").trim()}
+                    onChange={(e) => handleGoogleDocAutoSyncToggle(e.target.checked)}
+                  />
+                  Auto-sync every 30s while this map has unsynced changes
+                </label>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={handleGoogleDocSaveUrl}
+                    disabled={googleDocSaving}
+                    style={{
+                      flex: 1,
+                      fontSize: 12,
+                      padding: "6px 10px",
+                      borderRadius: 6,
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-tertiary)",
+                      color: "var(--text-primary)",
+                      cursor: googleDocSaving ? "wait" : "pointer",
+                    }}
+                  >
+                    Save URL
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleGoogleDocPush}
+                    disabled={googleDocPushing || !(selectedMap.googleDocUrl ?? "").trim()}
+                    title={!(selectedMap.googleDocUrl ?? "").trim() ? "Save a Doc URL first" : undefined}
+                    style={{
+                      flex: 1,
+                      fontSize: 12,
+                      padding: "6px 10px",
+                      borderRadius: 6,
+                      border: "none",
+                      background: "var(--accent-blue)",
+                      color: "#fff",
+                      fontWeight: 600,
+                      cursor: googleDocPushing || !(selectedMap.googleDocUrl ?? "").trim() ? "not-allowed" : "pointer",
+                      opacity: googleDocPushing || !(selectedMap.googleDocUrl ?? "").trim() ? 0.6 : 1,
+                    }}
+                  >
+                    {googleDocPushing ? "Pushing…" : "Push to Doc"}
+                  </button>
+                </div>
+                {googleDocMessage && (
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: 11,
+                      lineHeight: 1.4,
+                      color: googleDocMessage.error ? "var(--accent-red, #ef4444)" : "var(--accent-green, #22c55e)",
+                    }}
+                  >
+                    {googleDocMessage.text}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {connectNote && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 48,
+                  left: sidebarOpen ? 10 : 52,
+                  zIndex: 10,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 12,
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                  border: "1px solid var(--accent-amber)",
+                  background: "var(--bg-secondary)",
+                  color: "var(--accent-amber)",
+                  maxWidth: 320,
+                }}
+              >
+                {connectNote}
+                <button
+                  type="button"
+                  onClick={() => setConnectNote(null)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "inherit",
+                    cursor: "pointer",
+                    fontSize: 14,
+                    lineHeight: 1,
+                    padding: 0,
+                  }}
+                >
+                  &times;
+                </button>
+              </div>
+            )}
 
             <ReactFlow
               nodes={nodes}
-              edges={edges}
+              edges={displayEdges}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
+              onNodeDragStart={onNodeDragStart}
+              onNodeDrag={onNodeDrag}
               onNodeDragStop={onNodeDragStop}
               onConnect={onConnect}
+              onEdgeClick={onEdgeClick}
               isValidConnection={isValidConnection}
               nodeTypes={NODE_TYPES}
               defaultEdgeOptions={{
@@ -2440,7 +3426,11 @@ export default function MindMapsView() {
                 style: { strokeWidth: 2 },
                 markerEnd: { type: MarkerType.ArrowClosed },
               }}
-              onPaneClick={() => setSelectedNodeId(null)}
+              onPaneClick={() => {
+                setSelectedNodeIds([]);
+                setSelectedEdgeId(null);
+                setConnectNote(null);
+              }}
               fitView
               proOptions={{ hideAttribution: true }}
               style={{ width: "100%", height: "100%" }}
@@ -2448,7 +3438,12 @@ export default function MindMapsView() {
               <Background gap={24} color="var(--border-subtle)" />
               <Controls
                 showInteractive={false}
-                style={{ borderRadius: 8 }}
+                style={{
+                  borderRadius: 8,
+                  overflow: "hidden",
+                  border: "1px solid var(--border-color)",
+                  boxShadow: "0 1px 4px rgba(0,0,0,0.3)",
+                }}
               />
               <MiniMap
                 nodeColor="var(--accent-blue)"
@@ -2480,19 +3475,29 @@ export default function MindMapsView() {
       </div>
 
       {/* Detail panel */}
-      {selectedNode && (
+      {selectedNode ? (
         <NodeDetailPanel
           node={selectedNode}
           mapDefaultEdgeLineType={mapEdgeDefault}
           allTasks={tasks}
           linkedTask={selectedLinkedTask}
-          onClose={() => setSelectedNodeId(null)}
+          onClose={() => setSelectedNodeIds([])}
           onUpdateNode={onUpdateNode}
           onToggleComplete={onDetailToggleComplete}
           onToggleBoardVisibility={onDetailToggleBoardVisibility}
           onImportLinkedSubtasks={onDetailImportLinkedSubtasks}
         />
-      )}
+      ) : selectedEdgeChildNode ? (
+        <EdgeDetailPanel
+          childNode={selectedEdgeChildNode}
+          parentNode={selectedEdgeParentNode}
+          mapDefaultEdgeLineType={mapEdgeDefault}
+          onUpdateNode={onUpdateNode}
+          onReverse={reverseSelectedEdge}
+          onDelete={deleteSelectedEdge}
+          onClose={() => setSelectedEdgeId(null)}
+        />
+      ) : null}
     </div>
   );
 }

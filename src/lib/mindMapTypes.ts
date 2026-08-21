@@ -54,6 +54,10 @@ export interface MindMapDocument {
   defaultEdgeLineType?: MindMapEdgeLineType | null;
   nodes: MindMapNode[];
   updatedAt: string;
+  /** URL of a Google Doc (must be editable by the connected Google account) to sync this map's outline into. */
+  googleDocUrl?: string | null;
+  /** When true, automatically pushes this map's outline to `googleDocUrl` every 30s while changes are pending. */
+  googleDocAutoSync?: boolean;
 }
 
 export interface MindMapsEnvironment {

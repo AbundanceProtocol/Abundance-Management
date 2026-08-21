@@ -8,7 +8,15 @@ import type { AppDataStore, GoogleOAuthToken } from "@/lib/dataStore/types";
 import type { TaskItem } from "@/lib/types";
 import { readAppConfig } from "@/lib/appConfig";
 
-const SCOPES = ["https://www.googleapis.com/auth/calendar.events"];
+/**
+ * A single Google connection is shared across integrations (Calendar, Docs, …), so the
+ * authorization URL requests every scope this app can use. Existing connections must be
+ * reconnected (Disconnect → Connect) after new scopes are added here.
+ */
+const SCOPES = [
+  "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/documents",
+];
 
 /** The redirect URI sent during OAuth. Must match what's registered in Google Cloud Console. */
 export function getRedirectUri(): string {
@@ -69,7 +77,8 @@ export async function exchangeCodeForTokens(
 
 // ─── Authenticated client (with auto-refresh + persist) ───────────────────────
 
-async function getAuthedClient(
+/** Builds an OAuth2 client for `storedToken`, auto-persisting refreshed access tokens. Shared by every Google integration (Calendar, Docs, …). */
+export async function getAuthedClient(
   storedToken: GoogleOAuthToken,
   store: AppDataStore
 ) {

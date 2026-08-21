@@ -19,6 +19,13 @@
   --critical-path: #f59e0b;
   --tag-bg: #374151;
   --tag-text: #9ca3af;
+
+  /* React Flow theme overrides (zoom/fit controls default to light-mode colors otherwise) */
+  --xy-controls-button-background-color: #3a4050;
+  --xy-controls-button-background-color-hover: #4a5166;
+  --xy-controls-button-color: #ffffff;
+  --xy-controls-button-color-hover: #ffffff;
+  --xy-controls-button-border-color: #565e70;
 }
 
 * {
@@ -534,6 +541,25 @@ button {
 /* Mind map node hover actions */
 .react-flow__node:hover .mindmap-node-actions {
   opacity: 1 !important;
+}
+
+/* Mind map zoom/fit controls: restyle to match the dark theme (default is white-on-white, low contrast).
+   The --xy-controls-* variables above are the officially supported override; these rules are a
+   belt-and-suspenders fallback in case anything else sets those variables closer to the element. */
+.react-flow__controls-button {
+  background: #3a4050 !important;
+  border-bottom: 1px solid #565e70 !important;
+  color: #ffffff !important;
+}
+
+.react-flow__controls-button:hover {
+  background: #4a5166 !important;
+}
+
+.react-flow__controls-button svg,
+.react-flow__controls-button svg path {
+  fill: #ffffff !important;
+  color: #ffffff !important;
 }
 
 /* Mind map link anchors (handles on each edge) */

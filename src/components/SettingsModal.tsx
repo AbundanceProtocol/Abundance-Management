@@ -700,7 +700,8 @@ export default function SettingsModal({ open, onClose, onImportComplete }: Props
                     {gcal.configured && !gcal.connected && (
                       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                         <p style={{ margin: 0, fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-                          Connect your Google account to push tasks with due dates to Google Calendar.
+                          Connect your Google account to push tasks with due dates to Google
+                          Calendar, and to push mind map outlines to Google Docs.
                         </p>
                         <button
                           type="button"

@@ -1,16 +1,7 @@
 import { NextResponse } from "next/server";
-import { getAuthState, getSessionFromRequest, getVerifiedSessionPayload, isAuthDisabled, unauthorized } from "@/lib/auth";
+import { getAuthState, resolveEffectiveUserId, unauthorized } from "@/lib/auth";
 import { getDataStore } from "@/lib/dataStore/factory";
 import { pushMindMapToGoogleDoc } from "@/lib/googleDocs";
-
-async function resolveUserId(request: Request, store: Awaited<ReturnType<typeof getDataStore>>): Promise<string | null> {
-  if (isAuthDisabled()) return "dev-user";
-  const session = getSessionFromRequest(request) ?? "";
-  const claims = getVerifiedSessionPayload(session);
-  if (!claims?.u) return null;
-  const user = await store.findUserByUsername(claims.u);
-  return user?._id ?? null;
-}
 
 /** POST — push a mind map's node tree into the reserved region of its linked Google Doc. */
 export async function POST(request: Request) {
@@ -22,7 +13,7 @@ export async function POST(request: Request) {
   if (!mapId) return NextResponse.json({ error: "Missing mapId." }, { status: 400 });
 
   const store = await getDataStore();
-  const userId = await resolveUserId(request, store);
+  const userId = await resolveEffectiveUserId(request, store);
   if (!userId) return NextResponse.json({ error: "Could not resolve user." }, { status: 401 });
 
   const storedToken = await store.getGoogleOAuthToken(userId);

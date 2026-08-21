@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import { getAuthSecret as readAuthSecret } from "@/lib/appConfig";
+import type { AppDataStore } from "@/lib/dataStore/types";
 
 export const SESSION_COOKIE = "ab_session";
 
@@ -104,6 +105,34 @@ export function getAuthState(request: Request): AuthState {
 
 export function unauthorized(): Response {
   return Response.json({ error: "Unauthorized" }, { status: 401 });
+}
+
+/**
+ * Sentinel userId for legacy single-password logins (`APP_PASSWORD`), which have no
+ * per-user database record at all — everyone who logs in shares this one identity.
+ */
+export const LEGACY_USER_ID = "legacy-user";
+
+/**
+ * Resolves a stable userId for per-user features (e.g. the Google Calendar connection)
+ * that works across all three login modes this app supports:
+ *  - `SKIP_AUTH` dev bypass → fixed "dev-user" sentinel
+ *  - full multi-user DB accounts → the account's real `_id`, looked up by username
+ *  - legacy single-password login → fixed `LEGACY_USER_ID` sentinel (no DB account exists)
+ * Returns null only when there's no valid session at all.
+ */
+export async function resolveEffectiveUserId(
+  request: Request,
+  store: AppDataStore
+): Promise<string | null> {
+  if (isAuthDisabled()) return "dev-user";
+  const session = getSessionFromRequest(request) ?? "";
+  const claims = getVerifiedSessionPayload(session);
+  if (!claims) return null;
+  if (claims.leg) return LEGACY_USER_ID;
+  if (!claims.u) return null;
+  const user = await store.findUserByUsername(claims.u);
+  return user?._id ?? null;
 }
 
 export function verifyPassword(password: string): boolean {

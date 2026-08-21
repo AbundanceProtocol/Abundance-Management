@@ -1,7 +1,7 @@
 import { createHmac } from "crypto";
 import { redirect } from "next/navigation";
 import { getAuthSecret } from "@/lib/appConfig";
-import { getSessionFromRequest, getVerifiedSessionPayload, isAuthDisabled } from "@/lib/auth";
+import { getSessionFromRequest, resolveEffectiveUserId } from "@/lib/auth";
 import { getDataStore } from "@/lib/dataStore/factory";
 import { exchangeCodeForTokens, getGoogleCredentials } from "@/lib/googleCalendar";
 
@@ -46,19 +46,9 @@ export async function GET(request: Request) {
   const creds = await getGoogleCredentials(store);
   if (!creds) failWith("no_credentials");
 
-  // Resolve the current user
-  let userId: string;
-
-  if (isAuthDisabled()) {
-    // Dev mode: use a fixed sentinel userId
-    userId = "dev-user";
-  } else {
-    const claims = getVerifiedSessionPayload(session);
-    if (!claims?.u) failWith("no_session");
-    const user = await store.findUserByUsername(claims.u);
-    if (!user) failWith("no_user");
-    userId = user._id;
-  }
+  // Resolve the current user (works for dev bypass, legacy single-password, and DB accounts)
+  const userId = await resolveEffectiveUserId(request, store);
+  if (!userId) failWith("no_session");
 
   try {
     const tokens = await exchangeCodeForTokens(code, creds.clientId, creds.clientSecret);

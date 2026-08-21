@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAuthState, getSessionFromRequest, getVerifiedSessionPayload, isAuthDisabled, unauthorized } from "@/lib/auth";
+import { getAuthState, resolveEffectiveUserId, unauthorized } from "@/lib/auth";
 import { getDataStore } from "@/lib/dataStore/factory";
 import { getGoogleCredentials } from "@/lib/googleCalendar";
 
@@ -12,18 +12,7 @@ export async function GET(request: Request) {
   const creds = await getGoogleCredentials(store);
   const configured = Boolean(creds);
 
-  let userId: string | null = null;
-
-  if (isAuthDisabled()) {
-    userId = "dev-user";
-  } else {
-    const session = getSessionFromRequest(request) ?? "";
-    const claims = getVerifiedSessionPayload(session);
-    if (claims?.u) {
-      const user = await store.findUserByUsername(claims.u);
-      if (user) userId = user._id;
-    }
-  }
+  const userId = await resolveEffectiveUserId(request, store);
 
   if (!userId) {
     return NextResponse.json({ configured, connected: false, calendarId: null, connectedAt: null });

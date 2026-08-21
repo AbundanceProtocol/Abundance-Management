@@ -1,20 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDataStore } from "@/lib/dataStore/factory";
 import type { TaskItem, NewTask } from "@/lib/types";
-import { getAuthState, getSessionFromRequest, getVerifiedSessionPayload, isAuthDisabled, unauthorized } from "@/lib/auth";
-
-/** Resolve the current userId from the request (returns null if unavailable). */
-async function resolveUserId(
-  request: Request,
-  store: Awaited<ReturnType<typeof getDataStore>>
-): Promise<string | null> {
-  if (isAuthDisabled()) return "dev-user";
-  const session = getSessionFromRequest(request) ?? "";
-  const claims = getVerifiedSessionPayload(session);
-  if (!claims?.u) return null;
-  const user = await store.findUserByUsername(claims.u);
-  return user?._id ?? null;
-}
+import { getAuthState, resolveEffectiveUserId, unauthorized } from "@/lib/auth";
 
 /** Fire-and-forget GCal push for a task after save. */
 function triggerCalendarSync(taskId: string, method: "POST" | "DELETE", request: Request): void {
@@ -78,7 +65,7 @@ export async function PUT(request: Request) {
     await store.updateTask(_id, update, unsetLegacyUrl);
 
     // GCal sync: delete event if completed or dueDate cleared; push if dueDate present
-    const userId = await resolveUserId(request, store).catch(() => null);
+    const userId = await resolveEffectiveUserId(request, store).catch(() => null);
     if (userId) {
       const token = await store.getGoogleOAuthToken(userId).catch(() => null);
       if (token) {

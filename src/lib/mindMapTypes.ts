@@ -1,4 +1,10 @@
-export type MindMapNodeKind = "idea" | "task" | "note" | "artifact";
+/**
+ * `text` nodes have no title: they carry only `body` content and, in the Google Doc
+ * outline, render as a plain paragraph continuing the previous text instead of a new
+ * heading. Connecting a `text` node under a parent does not add a heading level — its
+ * own children are exported as if they were attached directly to its parent.
+ */
+export type MindMapNodeKind = "idea" | "task" | "note" | "artifact" | "text";
 
 /**
  * Connector path from parent → this node (React Flow built-in edge types, Miro-style presets in UI).

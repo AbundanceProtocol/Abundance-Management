@@ -24,6 +24,7 @@ import {
   type NodeProps,
   type NodeTypes,
   type EdgeChange,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useSearchParams } from "next/navigation";
@@ -108,6 +109,11 @@ const KIND_STYLE: Record<MindMapNodeKind, React.CSSProperties> = {
     border: "2px solid var(--accent-amber)",
     color: "var(--accent-amber)",
   },
+  text: {
+    background: "var(--bg-secondary)",
+    border: "2px dashed var(--border-color)",
+    color: "var(--text-secondary)",
+  },
 };
 
 const KIND_LABELS: Record<MindMapNodeKind, string> = {
@@ -115,6 +121,7 @@ const KIND_LABELS: Record<MindMapNodeKind, string> = {
   task: "Task",
   note: "Note",
   artifact: "URL",
+  text: "Text",
 };
 
 /** Selectable outline colors for node bubbles (swatches shown in the detail panel). */
@@ -142,6 +149,7 @@ const KIND_DEFAULT_OUTLINE_COLOR: Record<MindMapNodeKind, string> = {
   task: "var(--accent-blue)",
   note: "var(--accent-purple)",
   artifact: "var(--accent-amber)",
+  text: "var(--text-muted)",
 };
 
 /** Effective outline color for a node (custom color if set, else its kind default). */
@@ -298,8 +306,9 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
   };
 
   const style = nodeVisualStyle(data.kind, data.outlineColor);
+  const isTextOnly = data.kind === "text";
   const hasBody = Boolean((data.body ?? "").trim());
-  const showBodyArea = hasBody || editingBody || data.selected;
+  const showBodyArea = isTextOnly || hasBody || editingBody || data.selected;
 
   return (
     <div
@@ -309,11 +318,11 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
       }}
       style={{
         ...style,
-        borderRadius: 24,
-        padding: showBodyArea ? "12px 18px 14px" : "10px 20px",
+        borderRadius: isTextOnly ? 10 : 24,
+        padding: isTextOnly ? "10px 14px" : showBodyArea ? "12px 18px 14px" : "10px 20px",
         minWidth: 100,
         maxWidth: 280,
-        textAlign: "center",
+        textAlign: isTextOnly ? "left" : "center",
         fontSize: 13,
         fontWeight: 500,
         position: "relative",
@@ -380,6 +389,7 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
         style={{ ...HANDLE_DOT, top: "50%", opacity: 0.55, transform: "translateY(-50%)" }}
       />
 
+      {!isTextOnly && (
       <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "center" }}>
         {data.kind === "task" && data.taskId != null && (
           <button
@@ -470,11 +480,12 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
           </span>
         )}
       </div>
+      )}
 
       {showBodyArea && (
         <div
           style={{
-            marginTop: 8,
+            marginTop: isTextOnly ? 0 : 8,
             width: "100%",
             textAlign: "left",
           }}
@@ -502,7 +513,7 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
                   commitBody();
                 }
               }}
-              placeholder="Add content…"
+              placeholder={isTextOnly ? "Type paragraph text…" : "Add content…"}
               rows={2}
               style={{
                 width: "100%",
@@ -545,7 +556,7 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
                 opacity: data.taskCompleted ? 0.55 : 1,
               }}
             >
-              {hasBody ? data.body : "Add content…"}
+              {hasBody ? data.body : isTextOnly ? "Type paragraph text…" : "Add content…"}
             </div>
           )}
         </div>
@@ -970,29 +981,31 @@ function NodeDetailPanel({
             gap: 14,
           }}
         >
-          {/* Label / title */}
-          <div>
-            <div style={LBL}>Label</div>
-            <input
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              onBlur={() => {
-                if (label.trim() !== node.label) {
-                  onUpdateNode(node.id, { label: label.trim() });
-                }
-              }}
-              style={{
-                width: "100%",
-                fontSize: 13,
-                padding: "6px 8px",
-                borderRadius: 6,
-                border: "1px solid var(--border-color)",
-                background: "var(--bg-tertiary)",
-                color: "var(--text-primary)",
-                boxSizing: "border-box",
-              }}
-            />
-          </div>
+          {/* Label / title (text nodes have no title — they render as a bodiless paragraph) */}
+          {node.kind !== "text" && (
+            <div>
+              <div style={LBL}>Label</div>
+              <input
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                onBlur={() => {
+                  if (label.trim() !== node.label) {
+                    onUpdateNode(node.id, { label: label.trim() });
+                  }
+                }}
+                style={{
+                  width: "100%",
+                  fontSize: 13,
+                  padding: "6px 8px",
+                  borderRadius: 6,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-tertiary)",
+                  color: "var(--text-primary)",
+                  boxSizing: "border-box",
+                }}
+              />
+            </div>
+          )}
 
           <div>
             <div style={LBL}>Type</div>
@@ -1365,9 +1378,9 @@ function NodeDetailPanel({
             </>
           )}
 
-          {/* Content under title (all node kinds) */}
+          {/* Content: body text under the title, or the whole paragraph for text nodes */}
           <div>
-            <div style={LBL}>Content</div>
+            <div style={LBL}>{node.kind === "text" ? "Paragraph text" : "Content"}</div>
             <textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}
@@ -1377,7 +1390,11 @@ function NodeDetailPanel({
                 }
               }}
               rows={5}
-              placeholder="Write content under the title…"
+              placeholder={
+                node.kind === "text"
+                  ? "Text that continues the previous node's paragraph in the Google Doc…"
+                  : "Write content under the title…"
+              }
               style={{
                 width: "100%",
                 fontSize: 12,
@@ -1777,6 +1794,10 @@ export default function MindMapsView() {
   const [addKind, setAddKind] = useState<MindMapNodeKind>("idea");
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initializedRef = useRef(false);
+  /** Live React Flow instance, used to convert the current viewport into flow coordinates when placing new nodes. */
+  const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
+  /** Bounding box of the canvas pane, used to find the screen-space center of the current view. */
+  const canvasWrapperRef = useRef<HTMLDivElement>(null);
   /** While dragging a node that's part of a multi-selection, tracks the group so the rest can be dragged along. */
   const dragGroupRef = useRef<{ ids: string[]; last: { x: number; y: number } } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -2586,14 +2607,30 @@ export default function MindMapsView() {
     [deleteMap, selectedMapId],
   );
 
+  /** Flow-space position for the middle of the currently visible canvas (falls back to a fixed spot before the pane has mounted/initialized). */
+  const getViewportCenter = useCallback((): { x: number; y: number } => {
+    const instance = reactFlowInstanceRef.current;
+    const rect = canvasWrapperRef.current?.getBoundingClientRect();
+    if (!instance || !rect) return { x: 400, y: 300 };
+    const center = instance.screenToFlowPosition({
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    });
+    // Shift by roughly half a node's size so the node itself (not just its top-left corner) lands on-center.
+    return { x: center.x - 70, y: center.y - 24 };
+  }, []);
+
   const addRootNode = useCallback(() => {
     if (!selectedMap) return;
+    const center = getViewportCenter();
+    // Slight cascading offset so repeated clicks don't stack new nodes exactly on top of each other.
+    const stagger = (selectedMap.nodes.length % 5) * 24;
     const rootNode: MindMapNode = {
       id: newId(),
       parentId: null,
       kind: addKind,
-      x: 400,
-      y: (selectedMap.nodes.length + 1) * 80,
+      x: center.x + stagger,
+      y: center.y + stagger,
       label: "",
       url: addKind === "artifact" ? "" : null,
     };
@@ -2604,7 +2641,7 @@ export default function MindMapsView() {
       ...nds,
       ...toFlowNodes([rootNode], fullCallbacks, taskMap, selectedNodeIds),
     ]);
-  }, [selectedMap, addKind, upsertMap, setNodes, fullCallbacks, taskMap, selectedNodeIds]);
+  }, [selectedMap, addKind, getViewportCenter, upsertMap, setNodes, fullCallbacks, taskMap, selectedNodeIds]);
 
   const refreshFromTasks = useCallback(() => {
     if (!selectedMap?.anchorTaskId) return;
@@ -2942,7 +2979,7 @@ export default function MindMapsView() {
       )}
 
       {/* Canvas area */}
-      <div style={{ flex: 1, position: "relative" }}>
+      <div ref={canvasWrapperRef} style={{ flex: 1, position: "relative" }}>
         {!sidebarOpen && (
           <button
             type="button"
@@ -3430,6 +3467,9 @@ export default function MindMapsView() {
                 setSelectedNodeIds([]);
                 setSelectedEdgeId(null);
                 setConnectNote(null);
+              }}
+              onInit={(instance) => {
+                reactFlowInstanceRef.current = instance;
               }}
               fitView
               proOptions={{ hideAttribution: true }}

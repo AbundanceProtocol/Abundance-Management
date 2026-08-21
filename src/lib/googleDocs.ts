@@ -54,13 +54,28 @@ function buildLines(map: MindMapDocument): Line[] {
     if (visited.has(node.id)) return;
     visited.add(node.id);
 
-    const level = Math.min(depth + 1, 6);
-    lines.push({ kind: "heading", level, text: node.label?.trim() || "(untitled)" });
+    // `text` nodes have no title: they contribute a plain paragraph (continuing the
+    // previous text) instead of a heading, and don't consume a heading level — their
+    // children are exported at the same depth as if attached directly to the parent.
+    if (node.kind === "text") {
+      const text = (node.body?.trim() || node.label?.trim() || "");
+      if (text) {
+        // Blank line above so this reads as a new paragraph rather than running on
+        // from the previous line, without introducing a heading of its own.
+        if (lines.length > 0) lines.push({ kind: "body", text: "" });
+        for (const bodyLine of text.split(/\r?\n/)) {
+          lines.push({ kind: "body", text: bodyLine });
+        }
+      }
+    } else {
+      const level = Math.min(depth + 1, 6);
+      lines.push({ kind: "heading", level, text: node.label?.trim() || "(untitled)" });
 
-    const body = node.body?.trim();
-    if (body) {
-      for (const bodyLine of body.split(/\r?\n/)) {
-        lines.push({ kind: "body", text: bodyLine });
+      const body = node.body?.trim();
+      if (body) {
+        for (const bodyLine of body.split(/\r?\n/)) {
+          lines.push({ kind: "body", text: bodyLine });
+        }
       }
     }
 
@@ -69,8 +84,9 @@ function buildLines(map: MindMapDocument): Line[] {
       lines.push({ kind: "link", text: url, url });
     }
 
+    const childDepth = node.kind === "text" ? depth : depth + 1;
     for (const child of childrenByParent.get(node.id) ?? []) {
-      visit(child, depth + 1);
+      visit(child, childDepth);
     }
   }
 

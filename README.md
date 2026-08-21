@@ -72,11 +72,12 @@ Focused single-task view that displays the anchor task at the top followed by it
 
 A visual node-and-link graph editor for brainstorming and structuring ideas:
 
-- Four node types: **idea**, **task**, **note**, **URL**.
+- Five node types: **idea**, **task**, **note**, **URL**, and **text**.
 - Add parent-child connections with customizable line styles (Bezier, step, orthogonal, etc.).
 - Drag nodes to reposition; edit labels inline.
 - Nodes can be **linked to actual tasks** in the system.
 - Maps are saved and recalled per document.
+- Maps can be pushed to a linked **Google Doc** as a heading outline: each node's label becomes a heading whose level follows the node's depth in the tree. **Text** nodes have no title — they render as a plain paragraph continuing the previous text instead of a heading, and don't add a heading level, so their children stay at the same depth as if attached directly to the text node's parent.
 
 ### Google Calendar sync
 

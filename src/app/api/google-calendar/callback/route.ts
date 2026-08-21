@@ -5,27 +5,46 @@ import { getSessionFromRequest, getVerifiedSessionPayload, isAuthDisabled } from
 import { getDataStore } from "@/lib/dataStore/factory";
 import { exchangeCodeForTokens, getGoogleCredentials } from "@/lib/googleCalendar";
 
+/**
+ * Redirects home with a short, non-sensitive `reason` code so the UI (and whoever's
+ * debugging) can tell which check failed, instead of a silent generic `?gcal=error`.
+ * Full error detail (which may include internal messages) is only logged server-side.
+ */
+function failWith(reason: string, detail?: unknown): never {
+  if (detail !== undefined) {
+    console.error(`[google-calendar/callback] ${reason}:`, detail);
+  } else {
+    console.error(`[google-calendar/callback] ${reason}`);
+  }
+  redirect(`/?gcal=error&reason=${encodeURIComponent(reason)}`);
+}
+
 /** GET — Google redirects here after the user grants access. */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const state = searchParams.get("state");
-  const error = searchParams.get("error");
+  const googleError = searchParams.get("error");
 
-  if (error || !code) {
-    redirect("/?gcal=error");
-  }
+  if (googleError) failWith(`google_${googleError}`);
+  if (!code) failWith("no_code");
 
   // Verify CSRF state
   const session = getSessionFromRequest(request) ?? "";
   const expectedState = createHmac("sha256", getAuthSecret()).update(session).digest("hex");
   if (!state || state !== expectedState) {
-    redirect("/?gcal=error");
+    failWith("csrf_mismatch");
   }
 
-  const store = await getDataStore();
+  let store;
+  try {
+    store = await getDataStore();
+  } catch (e) {
+    failWith("datastore_error", e instanceof Error ? e.message : e);
+  }
+
   const creds = await getGoogleCredentials(store);
-  if (!creds) redirect("/?gcal=error");
+  if (!creds) failWith("no_credentials");
 
   // Resolve the current user
   let userId: string;
@@ -35,14 +54,14 @@ export async function GET(request: Request) {
     userId = "dev-user";
   } else {
     const claims = getVerifiedSessionPayload(session);
-    if (!claims?.u) redirect("/?gcal=error");
+    if (!claims?.u) failWith("no_session");
     const user = await store.findUserByUsername(claims.u);
-    if (!user) redirect("/?gcal=error");
+    if (!user) failWith("no_user");
     userId = user._id;
   }
 
   try {
-    const tokens = await exchangeCodeForTokens(code!, creds.clientId, creds.clientSecret);
+    const tokens = await exchangeCodeForTokens(code, creds.clientId, creds.clientSecret);
     await store.saveGoogleOAuthToken({
       userId,
       accessToken: tokens.accessToken,
@@ -51,8 +70,8 @@ export async function GET(request: Request) {
       calendarId: "primary",
       connectedAt: new Date().toISOString(),
     });
-  } catch {
-    redirect("/?gcal=error");
+  } catch (e) {
+    failWith("token_exchange_failed", e instanceof Error ? e.message : e);
   }
 
   redirect("/?gcal=connected");

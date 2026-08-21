@@ -20,12 +20,23 @@ interface Props {
   onClose: () => void;
   /** Called after a successful import so the parent can refetch data. */
   onImportComplete?: () => void;
+  /** Tab to show when the modal opens (e.g. deep-link from a Google OAuth redirect). */
+  initialTab?: SettingsTab;
+  /** One-time notice to show in the Google Cal tab (e.g. result of an OAuth redirect). */
+  initialGcalNotice?: { ok: boolean; text: string } | null;
 }
 
-export default function SettingsModal({ open, onClose, onImportComplete }: Props) {
+export default function SettingsModal({
+  open,
+  onClose,
+  onImportComplete,
+  initialTab,
+  initialGcalNotice,
+}: Props) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>("backup");
+  const [gcalNotice, setGcalNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importPreview, setImportPreview] = useState<{
@@ -73,7 +84,8 @@ export default function SettingsModal({ open, onClose, onImportComplete }: Props
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setActiveTab("backup");
+    setActiveTab(initialTab ?? "backup");
+    setGcalNotice(initialGcalNotice ?? null);
     setError(null);
     setCredOk(null);
     setGcalSyncResult(null);
@@ -97,6 +109,7 @@ export default function SettingsModal({ open, onClose, onImportComplete }: Props
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- initialTab/initialGcalNotice are only meant to apply at open-time
   }, [open]);
 
   // Clear tab-specific errors when switching tabs
@@ -631,6 +644,18 @@ export default function SettingsModal({ open, onClose, onImportComplete }: Props
             {activeTab === "calendar" && (
               <>
                 <SectionHeading icon={<Calendar size={13} />}>Google Calendar</SectionHeading>
+                {gcalNotice && (
+                  <p
+                    style={{
+                      margin: "0 0 10px",
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                      color: gcalNotice.ok ? "var(--accent-green, #22c55e)" : "var(--accent-red, #ef4444)",
+                    }}
+                  >
+                    {gcalNotice.text}
+                  </p>
+                )}
                 {!gcal ? (
                   <p style={{ margin: 0, fontSize: 12, color: "var(--text-secondary)" }}>Loading…</p>
                 ) : (

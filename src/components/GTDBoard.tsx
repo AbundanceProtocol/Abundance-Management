@@ -156,6 +156,21 @@ function readBoardLayoutMode(): BoardLayoutMode {
   return "all";
 }
 
+/** Human-readable text for `reason` codes set by /api/google-calendar/callback on failure. */
+const GCAL_ERROR_MESSAGES: Record<string, string> = {
+  google_access_denied: "You declined access, or Google denied the request.",
+  google_admin_policy_enforced:
+    "Your Google Workspace admin has blocked this app. Try a personal Google account, or ask your admin to allow it.",
+  no_code: "Google didn't return an authorization code.",
+  csrf_mismatch: "Session verification failed. Please try connecting again.",
+  datastore_error: "Couldn't reach the database while connecting to Google.",
+  no_credentials: "Google credentials aren't configured.",
+  no_session: "You weren't recognized as logged in when Google redirected back.",
+  no_user: "Your account couldn't be found.",
+  token_exchange_failed: "Google rejected the authorization (redirect URI mismatch, or the code expired).",
+  default: "Something went wrong connecting Google Calendar.",
+};
+
 /** Prefer the thin strip below a row (`nest-below-*`) so nesting vs reorder is explicit; else pointer-in-rect; else closest center. */
 const nestStripCollision: CollisionDetection = (args) => {
   const pointCollisions = pointerWithin(args);
@@ -203,6 +218,8 @@ export default function GTDBoard() {
   /** Mobile: board chrome starts collapsed to leave room for the task list. */
   const [mobileBoardMenuOpen, setMobileBoardMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<"calendar" | undefined>(undefined);
+  const [gcalNotice, setGcalNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
   const handleImportComplete = useCallback(() => {
     refetchSections();
@@ -212,6 +229,28 @@ export default function GTDBoard() {
   useEffect(() => {
     if (!viewportNarrow) setMobileBoardMenuOpen(false);
   }, [viewportNarrow]);
+
+  // Surface the result of a Google Calendar OAuth redirect (see /api/google-calendar/callback).
+  useEffect(() => {
+    const gcal = searchParams.get("gcal");
+    if (!gcal) return;
+
+    if (gcal === "connected") {
+      setGcalNotice({ ok: true, text: "Google Calendar connected successfully." });
+    } else {
+      const reason = searchParams.get("reason") ?? "unknown";
+      setGcalNotice({ ok: false, text: `${GCAL_ERROR_MESSAGES[reason] ?? GCAL_ERROR_MESSAGES.default} (reason: ${reason})` });
+    }
+    setSettingsInitialTab("calendar");
+    setSettingsOpen(true);
+
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("gcal");
+    params.delete("reason");
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to the gcal param itself
+  }, [searchParams]);
 
   const boardTab = boardLayoutMode === "completed" ? "completed" : "board";
   const showTodayFocusOnly = boardLayoutMode === "today";
@@ -1121,8 +1160,14 @@ export default function GTDBoard() {
 
       <SettingsModal
         open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
+        onClose={() => {
+          setSettingsOpen(false);
+          setSettingsInitialTab(undefined);
+          setGcalNotice(null);
+        }}
         onImportComplete={handleImportComplete}
+        initialTab={settingsInitialTab}
+        initialGcalNotice={gcalNotice}
       />
     </div>
   );

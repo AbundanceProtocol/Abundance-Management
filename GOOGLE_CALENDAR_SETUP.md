@@ -62,6 +62,17 @@ map's outline into a Google Doc. Both features share one Google connection. Setu
 3. Paste your **Client ID** and **Client Secret** into the fields
 4. Click **Save credentials**
 
+Credentials are saved to your database (the same one the app already uses for tasks/users —
+Mongo, Postgres, or SQLite), not to a local file. This means they work correctly on hosts with
+a read-only filesystem (e.g. Netlify, Vercel), and saving them once from *any* environment
+(local dev or your hosted deployment) makes them available everywhere else that points at the
+same database. If your local dev environment and your hosted deployment use **different**
+databases (e.g. separate "development" and "production" `MONGODB_URI` values), you'll need to
+save the credentials once in each.
+
+If you had credentials saved from before this change (in a local `data/app-config.json` file),
+run `npm run migrate:google-credentials` once to copy them into MongoDB automatically.
+
 ---
 
 ## Step 6 — Connect Your Google Account
@@ -129,6 +140,10 @@ artifact links as hyperlinks) into that document.
 → Your existing connection was authorized before Docs access was requested. Go to Settings →
 Google Cal → Disconnect, then Connect again to grant the new scope. If you skipped enabling
 the Google Docs API in Step 2, do that first.
+
+**"Save failed" when pasting Client ID / Secret in Settings**
+→ Credentials are saved to your database. Make sure `MONGODB_URI` (or your configured
+Postgres/SQLite connection) is set correctly and reachable from wherever the app is running.
 
 **"Google Doc not found" when pushing**
 → Double check the URL, and make sure the Google account connected in this app (Settings →

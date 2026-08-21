@@ -4,9 +4,8 @@
  */
 
 import { google } from "googleapis";
-import type { AppDataStore, GoogleOAuthToken } from "@/lib/dataStore/types";
+import type { AppDataStore, GoogleClientCredentials, GoogleOAuthToken } from "@/lib/dataStore/types";
 import type { TaskItem } from "@/lib/types";
-import { readAppConfig } from "@/lib/appConfig";
 
 /**
  * A single Google connection is shared across integrations (Calendar, Docs, …), so the
@@ -33,12 +32,15 @@ function makeOAuth2Client(clientId: string, clientSecret: string) {
 
 // ─── Credential helpers ───────────────────────────────────────────────────────
 
-export function getGoogleCredentials(): { clientId: string; clientSecret: string } | null {
-  const cfg = readAppConfig();
-  const clientId = cfg?.googleClientId?.trim();
-  const clientSecret = cfg?.googleClientSecret?.trim();
-  if (!clientId || !clientSecret) return null;
-  return { clientId, clientSecret };
+/**
+ * The app's own Google OAuth client ID/secret, saved from Settings → Google Cal.
+ * Stored in the database (not a local file) so it works on hosts with a read-only
+ * filesystem, such as serverless platforms like Netlify.
+ */
+export async function getGoogleCredentials(
+  store: AppDataStore
+): Promise<GoogleClientCredentials | null> {
+  return store.getGoogleClientCredentials();
 }
 
 // ─── OAuth URL generation ─────────────────────────────────────────────────────
@@ -82,7 +84,7 @@ export async function getAuthedClient(
   storedToken: GoogleOAuthToken,
   store: AppDataStore
 ) {
-  const creds = getGoogleCredentials();
+  const creds = await getGoogleCredentials(store);
   if (!creds) throw new Error("Google credentials not configured.");
 
   const oauth2 = makeOAuth2Client(creds.clientId, creds.clientSecret);

@@ -17,6 +17,7 @@ async function ensurePg(pool: Pool) {
     `CREATE TABLE IF NOT EXISTS password_reset_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL, expires_at TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS google_oauth_tokens (user_id TEXT PRIMARY KEY, doc JSONB NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS view_tokens (id TEXT PRIMARY KEY, name TEXT NOT NULL, token TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS app_settings (id TEXT PRIMARY KEY, doc JSONB NOT NULL)`,
   ];
   for (const s of stmts) await pool.query(s);
 }
@@ -31,6 +32,7 @@ function ensureSqlite(db: Database.Database) {
     CREATE TABLE IF NOT EXISTS password_reset_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL, expires_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS google_oauth_tokens (user_id TEXT PRIMARY KEY, doc TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS view_tokens (id TEXT PRIMARY KEY, name TEXT NOT NULL, token TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS app_settings (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
   `);
 }
 

@@ -28,6 +28,12 @@ export type GoogleOAuthToken = {
   connectedAt: string; // ISO timestamp
 };
 
+/** The app's own Google OAuth client (from Google Cloud Console), shared across all users. */
+export type GoogleClientCredentials = {
+  clientId: string;
+  clientSecret: string;
+};
+
 export type BackupPayload = {
   version: number;
   exportedAt: string;
@@ -77,6 +83,9 @@ export interface AppDataStore {
   getGoogleOAuthToken(userId: string): Promise<GoogleOAuthToken | null>;
   saveGoogleOAuthToken(token: GoogleOAuthToken): Promise<void>;
   deleteGoogleOAuthToken(userId: string): Promise<void>;
+  /** The app's shared Google OAuth client ID/secret (from Settings → Google Cal). */
+  getGoogleClientCredentials(): Promise<GoogleClientCredentials | null>;
+  saveGoogleClientCredentials(creds: GoogleClientCredentials): Promise<void>;
   /** Clear googleCalendarEventId / syncStatus on all tasks (used on disconnect). */
   clearGoogleCalendarFieldsOnAllTasks(): Promise<void>;
   savePasswordResetToken(input: {

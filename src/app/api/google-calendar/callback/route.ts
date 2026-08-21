@@ -23,11 +23,11 @@ export async function GET(request: Request) {
     redirect("/?gcal=error");
   }
 
-  const creds = getGoogleCredentials();
+  const store = await getDataStore();
+  const creds = await getGoogleCredentials(store);
   if (!creds) redirect("/?gcal=error");
 
   // Resolve the current user
-  const store = await getDataStore();
   let userId: string;
 
   if (isAuthDisabled()) {

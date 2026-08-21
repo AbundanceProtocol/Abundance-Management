@@ -8,10 +8,10 @@ export async function GET(request: Request) {
   const auth = getAuthState(request);
   if (!auth.canRead) return unauthorized();
 
-  const creds = getGoogleCredentials();
+  const store = await getDataStore();
+  const creds = await getGoogleCredentials(store);
   const configured = Boolean(creds);
 
-  const store = await getDataStore();
   let userId: string | null = null;
 
   if (isAuthDisabled()) {

@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import type { Pool } from "pg";
-import type { AppDataStore, BackupPayload, GoogleOAuthToken, ReorderItem, UserRecord } from "@/lib/dataStore/types";
+import type { AppDataStore, BackupPayload, GoogleClientCredentials, GoogleOAuthToken, ReorderItem, UserRecord } from "@/lib/dataStore/types";
 import type { PagesEnvironment } from "@/lib/pagesTypes";
 import type { MindMapsEnvironment } from "@/lib/mindMapTypes";
 import type { NewTask, Section, TaskItem, ViewToken } from "@/lib/types";
@@ -503,6 +503,24 @@ export function buildPostgresDataStore(pool: Pool): AppDataStore {
 
     async deleteGoogleOAuthToken(userId) {
       await pool.query("DELETE FROM google_oauth_tokens WHERE user_id = $1", [userId]);
+    },
+
+    async getGoogleClientCredentials() {
+      const { rows } = await pool.query<{ doc: unknown }>(
+        "SELECT doc FROM app_settings WHERE id = 'google_credentials'"
+      );
+      if (!rows[0]) return null;
+      const creds = parseDoc<GoogleClientCredentials>(rows[0].doc);
+      if (!creds?.clientId || !creds?.clientSecret) return null;
+      return creds;
+    },
+
+    async saveGoogleClientCredentials(creds: GoogleClientCredentials) {
+      await pool.query(
+        `INSERT INTO app_settings (id, doc) VALUES ('google_credentials', $1::jsonb)
+         ON CONFLICT (id) DO UPDATE SET doc = EXCLUDED.doc`,
+        [JSON.stringify(creds)]
+      );
     },
 
     async clearGoogleCalendarFieldsOnAllTasks() {

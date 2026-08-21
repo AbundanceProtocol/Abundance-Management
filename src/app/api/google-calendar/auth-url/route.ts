@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createHmac } from "crypto";
 import { getAuthState, getSessionFromRequest, unauthorized } from "@/lib/auth";
 import { getAuthSecret } from "@/lib/appConfig";
+import { getDataStore } from "@/lib/dataStore/factory";
 import { getAuthUrl, getGoogleCredentials } from "@/lib/googleCalendar";
 
 /** GET — generate and return the Google OAuth authorization URL. */
@@ -9,7 +10,8 @@ export async function GET(request: Request) {
   const auth = getAuthState(request);
   if (!auth.canEdit) return unauthorized();
 
-  const creds = getGoogleCredentials();
+  const store = await getDataStore();
+  const creds = await getGoogleCredentials(store);
   if (!creds) {
     return NextResponse.json(
       { error: "Google Calendar credentials are not configured." },

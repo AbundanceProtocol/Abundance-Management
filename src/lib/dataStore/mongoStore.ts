@@ -1,5 +1,5 @@
 import { MongoClient, Db, ObjectId } from "mongodb";
-import type { AppDataStore, BackupPayload, GoogleOAuthToken, ReorderItem, UserRecord } from "@/lib/dataStore/types";
+import type { AppDataStore, BackupPayload, GoogleClientCredentials, GoogleOAuthToken, ReorderItem, UserRecord } from "@/lib/dataStore/types";
 import type { PagesEnvironment } from "@/lib/pagesTypes";
 import type { MindMapsEnvironment } from "@/lib/mindMapTypes";
 import type { NewTask, Section, TaskItem, ViewToken } from "@/lib/types";
@@ -355,6 +355,33 @@ export async function createMongoStore(): Promise<AppDataStore> {
 
     async deleteGoogleOAuthToken(userId) {
       await database.collection("google_oauth_tokens").deleteOne({ userId });
+    },
+
+    async getGoogleClientCredentials() {
+      const doc = (await database
+        .collection("app_settings")
+        .findOne({ _id: "google_credentials" as unknown as ObjectId })) as {
+        clientId?: string;
+        clientSecret?: string;
+      } | null;
+      const clientId = doc?.clientId?.trim();
+      const clientSecret = doc?.clientSecret?.trim();
+      if (!clientId || !clientSecret) return null;
+      return { clientId, clientSecret };
+    },
+
+    async saveGoogleClientCredentials(creds: GoogleClientCredentials) {
+      await database.collection("app_settings").updateOne(
+        { _id: "google_credentials" as unknown as ObjectId },
+        {
+          $set: {
+            clientId: creds.clientId,
+            clientSecret: creds.clientSecret,
+            updatedAt: new Date().toISOString(),
+          },
+        },
+        { upsert: true }
+      );
     },
 
     async clearGoogleCalendarFieldsOnAllTasks() {

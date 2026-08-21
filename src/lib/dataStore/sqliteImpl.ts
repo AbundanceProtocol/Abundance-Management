@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import type Database from "better-sqlite3";
-import type { AppDataStore, BackupPayload, GoogleOAuthToken, ReorderItem, UserRecord } from "@/lib/dataStore/types";
+import type { AppDataStore, BackupPayload, GoogleClientCredentials, GoogleOAuthToken, ReorderItem, UserRecord } from "@/lib/dataStore/types";
 import type { PagesEnvironment } from "@/lib/pagesTypes";
 import type { MindMapsEnvironment } from "@/lib/mindMapTypes";
 import type { NewTask, Section, TaskItem, ViewToken } from "@/lib/types";
@@ -440,6 +440,23 @@ export function buildSqliteDataStore(db: Database.Database): AppDataStore {
 
     async deleteGoogleOAuthToken(userId) {
       db.prepare("DELETE FROM google_oauth_tokens WHERE user_id = ?").run(userId);
+    },
+
+    async getGoogleClientCredentials() {
+      const row = db
+        .prepare("SELECT doc FROM app_settings WHERE id = 'google_credentials'")
+        .get() as { doc: string } | undefined;
+      if (!row) return null;
+      const creds = JSON.parse(row.doc) as GoogleClientCredentials;
+      if (!creds?.clientId || !creds?.clientSecret) return null;
+      return creds;
+    },
+
+    async saveGoogleClientCredentials(creds: GoogleClientCredentials) {
+      db.prepare(
+        `INSERT INTO app_settings (id, doc) VALUES ('google_credentials', ?)
+         ON CONFLICT(id) DO UPDATE SET doc = excluded.doc`
+      ).run(JSON.stringify(creds));
     },
 
     async clearGoogleCalendarFieldsOnAllTasks() {

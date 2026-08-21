@@ -29,6 +29,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useSearchParams } from "next/navigation";
 import { useMindMaps, useTasks } from "@/lib/hooks";
+import { useViewportNarrow } from "@/lib/useViewportNarrow";
 import {
   DEFAULT_MIND_MAP_EDGE_LINE_TYPE,
   type MindMapDocument,
@@ -562,7 +563,7 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
         </div>
       )}
 
-      {/* Hover actions */}
+      {/* Hover actions (also shown on tap/selection, since touch devices have no hover state) */}
       <div
         className="mindmap-node-actions"
         style={{
@@ -571,7 +572,7 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
           right: -10,
           display: "flex",
           gap: 2,
-          opacity: 0,
+          opacity: data.selected ? 1 : 0,
           transition: "opacity 0.15s",
         }}
       >
@@ -822,6 +823,36 @@ export function importTaskSubtasksIntoMap(
 
 /* ─── Detail panel for selected node ─── */
 
+/** Side panel on desktop; a swipe-up-style bottom sheet on narrow viewports so it never squeezes the canvas. */
+function detailPanelContainerStyle(viewportNarrow: boolean): React.CSSProperties {
+  if (viewportNarrow) {
+    return {
+      position: "fixed",
+      left: 0,
+      right: 0,
+      bottom: 0,
+      maxHeight: "60vh",
+      borderTop: "1px solid var(--border-color)",
+      borderRadius: "12px 12px 0 0",
+      background: "var(--bg-secondary)",
+      display: "flex",
+      flexDirection: "column",
+      overflow: "hidden",
+      zIndex: 60,
+      boxShadow: "0 -4px 20px rgba(0,0,0,0.4)",
+    };
+  }
+  return {
+    width: 300,
+    flexShrink: 0,
+    borderLeft: "1px solid var(--border-color)",
+    background: "var(--bg-secondary)",
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+  };
+}
+
 function NodeDetailPanel({
   node,
   mapDefaultEdgeLineType: mapEdgeDefault,
@@ -843,6 +874,7 @@ function NodeDetailPanel({
   onToggleBoardVisibility: () => void;
   onImportLinkedSubtasks: () => string;
 }) {
+  const viewportNarrow = useViewportNarrow();
   const [label, setLabel] = useState(node.label);
   const [body, setBody] = useState(node.body ?? "");
   const [url, setUrl] = useState(node.url ?? "");
@@ -913,17 +945,7 @@ function NodeDetailPanel({
   };
 
   return (
-    <div
-      style={{
-        width: 300,
-        flexShrink: 0,
-        borderLeft: "1px solid var(--border-color)",
-        background: "var(--bg-secondary)",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}
-    >
+    <div style={detailPanelContainerStyle(viewportNarrow)}>
       {/* Header */}
       <div
         style={{
@@ -1240,20 +1262,6 @@ function NodeDetailPanel({
             </div>
           )}
 
-          {node.parentId && (
-            <div
-              style={{
-                padding: "10px 0 0",
-                borderTop: "1px solid var(--border-subtle)",
-                fontSize: 11,
-                color: "var(--text-muted)",
-              }}
-            >
-              Click the connector arrow on the canvas to edit its line style and
-              anchor sides.
-            </div>
-          )}
-
           {isTask && linkedTask && (
             <>
               {/* Completion toggle */}
@@ -1389,7 +1397,7 @@ function NodeDetailPanel({
                   onUpdateNode(node.id, { body });
                 }
               }}
-              rows={5}
+              rows={viewportNarrow ? (node.kind === "text" ? 16 : 9) : 5}
               placeholder={
                 node.kind === "text"
                   ? "Text that continues the previous node's paragraph in the Google Doc…"
@@ -1397,7 +1405,7 @@ function NodeDetailPanel({
               }
               style={{
                 width: "100%",
-                fontSize: 12,
+                fontSize: viewportNarrow ? 14 : 12,
                 padding: "8px 10px",
                 borderRadius: 6,
                 border: "1px solid var(--border-color)",
@@ -1406,6 +1414,7 @@ function NodeDetailPanel({
                 resize: "vertical",
                 boxSizing: "border-box",
                 fontFamily: "inherit",
+                minHeight: viewportNarrow ? (node.kind === "text" ? "42vh" : "24vh") : undefined,
               }}
             />
           </div>
@@ -1479,21 +1488,14 @@ function EdgeDetailPanel({
   onDelete: () => void;
   onClose: () => void;
 }) {
+  const viewportNarrow = useViewportNarrow();
   const LBL = { fontSize: 11, color: "var(--text-muted)", marginBottom: 4 } as const;
   const isLinkedTask = Boolean(childNode.taskId);
   const color = parentNode ? nodeOutlineColor(parentNode) : nodeOutlineColor(childNode);
 
   return (
     <div
-      style={{
-        width: 300,
-        flexShrink: 0,
-        borderLeft: "1px solid var(--border-color)",
-        background: "var(--bg-secondary)",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}
+      style={detailPanelContainerStyle(viewportNarrow)}
     >
       <div
         style={{
@@ -1801,6 +1803,15 @@ export default function MindMapsView() {
   /** While dragging a node that's part of a multi-selection, tracks the group so the rest can be dragged along. */
   const dragGroupRef = useRef<{ ids: string[]; last: { x: number; y: number } } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const viewportNarrow = useViewportNarrow();
+  /** Auto-collapse the sidebar the first time we detect a narrow viewport, without fighting later manual toggles. */
+  const autoCollapsedSidebarRef = useRef(false);
+  useEffect(() => {
+    if (viewportNarrow && !autoCollapsedSidebarRef.current) {
+      autoCollapsedSidebarRef.current = true;
+      setSidebarOpen(false);
+    }
+  }, [viewportNarrow]);
 
   // Google Doc sync panel
   const [googleDocPanelOpen, setGoogleDocPanelOpen] = useState(false);
@@ -2831,17 +2842,53 @@ export default function MindMapsView() {
       {sidebarOpen && (
         <aside
           style={{
-            width: 240,
+            width: viewportNarrow ? "min(80vw, 280px)" : 240,
             flexShrink: 0,
             borderRight: "1px solid var(--border-color)",
             background: "var(--bg-secondary)",
             display: "flex",
             flexDirection: "column",
             overflow: "hidden",
+            ...(viewportNarrow
+              ? {
+                  position: "fixed",
+                  top: 0,
+                  left: 0,
+                  bottom: 0,
+                  zIndex: 50,
+                  boxShadow: "2px 0 16px rgba(0,0,0,0.4)",
+                }
+              : null),
           }}
         >
-          <div style={{ padding: "16px 14px 8px" }}>
-            <AppNavTasksPages active="mind-maps" />
+          <div style={{ padding: "16px 14px 8px", display: "flex", alignItems: "flex-start", gap: 8 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <AppNavTasksPages active="mind-maps" />
+            </div>
+            {viewportNarrow && (
+              <button
+                type="button"
+                onClick={() => setSidebarOpen(false)}
+                title="Close sidebar"
+                style={{
+                  flexShrink: 0,
+                  width: 28,
+                  height: 28,
+                  borderRadius: 6,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-tertiary)",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 16,
+                  lineHeight: 1,
+                }}
+              >
+                &times;
+              </button>
+            )}
           </div>
           <div style={{ padding: "8px 14px" }}>
             <button
@@ -2977,6 +3024,17 @@ export default function MindMapsView() {
           </div>
         </aside>
       )}
+      {sidebarOpen && viewportNarrow && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.5)",
+            zIndex: 49,
+          }}
+        />
+      )}
 
       {/* Canvas area */}
       <div ref={canvasWrapperRef} style={{ flex: 1, position: "relative" }}>
@@ -3014,14 +3072,25 @@ export default function MindMapsView() {
               style={{
                 position: "absolute",
                 top: 10,
-                left: sidebarOpen ? 10 : 52,
+                left: sidebarOpen && !viewportNarrow ? 10 : 52,
+                right: viewportNarrow ? 10 : undefined,
                 zIndex: 10,
                 display: "flex",
+                flexWrap: viewportNarrow ? "wrap" : "nowrap",
                 gap: 6,
                 alignItems: "center",
+                ...(viewportNarrow
+                  ? {
+                      padding: 6,
+                      borderRadius: 8,
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-secondary)",
+                      boxShadow: "0 2px 10px rgba(0,0,0,0.25)",
+                    }
+                  : null),
               }}
             >
-              {sidebarOpen && (
+              {sidebarOpen && !viewportNarrow && (
                 <button
                   type="button"
                   onClick={() => setSidebarOpen(false)}
@@ -3289,9 +3358,10 @@ export default function MindMapsView() {
                 style={{
                   position: "absolute",
                   top: 48,
-                  left: sidebarOpen ? 10 : 52,
+                  left: sidebarOpen && !viewportNarrow ? 10 : 52,
+                  right: viewportNarrow ? 10 : undefined,
                   zIndex: 11,
-                  width: 320,
+                  width: viewportNarrow ? undefined : 320,
                   display: "flex",
                   flexDirection: "column",
                   gap: 8,
@@ -3413,7 +3483,8 @@ export default function MindMapsView() {
                 style={{
                   position: "absolute",
                   top: 48,
-                  left: sidebarOpen ? 10 : 52,
+                  left: sidebarOpen && !viewportNarrow ? 10 : 52,
+                  right: viewportNarrow ? 10 : undefined,
                   zIndex: 10,
                   display: "flex",
                   alignItems: "center",
@@ -3424,7 +3495,7 @@ export default function MindMapsView() {
                   border: "1px solid var(--accent-amber)",
                   background: "var(--bg-secondary)",
                   color: "var(--accent-amber)",
-                  maxWidth: 320,
+                  maxWidth: viewportNarrow ? undefined : 320,
                 }}
               >
                 {connectNote}
@@ -3485,15 +3556,17 @@ export default function MindMapsView() {
                   boxShadow: "0 1px 4px rgba(0,0,0,0.3)",
                 }}
               />
-              <MiniMap
-                nodeColor="var(--accent-blue)"
-                maskColor="rgba(0,0,0,0.5)"
-                style={{
-                  borderRadius: 8,
-                  border: "1px solid var(--border-color)",
-                  background: "var(--bg-primary)",
-                }}
-              />
+              {!viewportNarrow && (
+                <MiniMap
+                  nodeColor="var(--accent-blue)"
+                  maskColor="rgba(0,0,0,0.5)"
+                  style={{
+                    borderRadius: 8,
+                    border: "1px solid var(--border-color)",
+                    background: "var(--bg-primary)",
+                  }}
+                />
+              )}
             </ReactFlow>
           </>
         ) : (

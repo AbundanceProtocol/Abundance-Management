@@ -7,6 +7,7 @@
 import { google, docs_v1 } from "googleapis";
 import type { AppDataStore, GoogleOAuthToken } from "@/lib/dataStore/types";
 import type { MindMapDocument, MindMapNode } from "@/lib/mindMapTypes";
+import { compareMindMapSiblings } from "@/lib/mindMapTypes";
 import { getAuthedClient } from "@/lib/googleCalendar";
 
 /** Everything between these two sentinel paragraphs is replaced on every push; content outside is left alone. */
@@ -44,7 +45,7 @@ function buildLines(map: MindMapDocument): Line[] {
     childrenByParent.set(n.parentId, list);
   }
   for (const list of childrenByParent.values()) {
-    list.sort((a, b) => a.y - b.y || a.x - b.x);
+    list.sort(compareMindMapSiblings);
   }
 
   const lines: Line[] = [];
@@ -90,11 +91,7 @@ function buildLines(map: MindMapDocument): Line[] {
     }
   }
 
-  const roots = [...(childrenByParent.get(null) ?? [])].sort((a, b) => {
-    if (a.id === map.rootNodeId) return -1;
-    if (b.id === map.rootNodeId) return 1;
-    return a.y - b.y || a.x - b.x;
-  });
+  const roots = [...(childrenByParent.get(null) ?? [])].sort(compareMindMapSiblings);
   for (const root of roots) visit(root, 0);
 
   // Nodes whose parentId doesn't resolve to anything on the map would otherwise be dropped silently.

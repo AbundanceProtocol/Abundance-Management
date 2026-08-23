@@ -29,6 +29,10 @@ export interface MindMapNode {
   x: number;
   y: number;
   label: string;
+  /** Manual sibling order for Google Doc export (lower = earlier). Nodes without this fall
+   *  back to canvas position (y, then x). Set automatically the first time a node is moved
+   *  up or down within its sibling group via the node detail panel. */
+  order?: number | null;
   /** Reference to an existing task (kind === "task"). */
   taskId?: string | null;
   /** Free-form content shown under the title inside the node bubble. */
@@ -64,6 +68,19 @@ export interface MindMapDocument {
   googleDocUrl?: string | null;
   /** When true, automatically pushes this map's outline to `googleDocUrl` every 30s while changes are pending. */
   googleDocAutoSync?: boolean;
+}
+
+/**
+ * Sorts two sibling `MindMapNode`s for Google Doc export order.
+ * Nodes with an explicit `order` value are sorted by that number (lower = earlier);
+ * ties, and nodes without any explicit order, fall back to canvas position (y, then x).
+ * This comparator is defined here (not in googleDocs.ts) so client code can import it
+ * without pulling in the server-only googleapis dependency.
+ */
+export function compareMindMapSiblings(a: MindMapNode, b: MindMapNode): number {
+  const ao = a.order ?? Number.POSITIVE_INFINITY;
+  const bo = b.order ?? Number.POSITIVE_INFINITY;
+  return ao - bo || a.y - b.y || a.x - b.x;
 }
 
 export interface MindMapsEnvironment {

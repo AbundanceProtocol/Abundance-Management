@@ -395,3 +395,23 @@ export function LogOut({ size = 16, className = "" }: IconProps) {
     </svg>
   );
 }
+
+/** Two overlapping rectangles — duplicate / copy */
+export function Copy({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <rect x="5" y="5" width="8" height="9" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M3 11V3a1 1 0 011-1h7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** Circular arrows — refresh / sync */
+export function Refresh({ size = 16, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className}>
+      <path d="M13.5 8A5.5 5.5 0 1 1 11.2 3.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M11.2 1.8v2.4h2.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}

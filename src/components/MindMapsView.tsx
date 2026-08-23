@@ -1,8 +1,11 @@
 "use client";
 
 import React, {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -31,6 +34,7 @@ import { useSearchParams } from "next/navigation";
 import { useMindMaps, useTasks } from "@/lib/hooks";
 import { useViewportNarrow } from "@/lib/useViewportNarrow";
 import {
+  compareMindMapSiblings,
   DEFAULT_MIND_MAP_EDGE_LINE_TYPE,
   type MindMapDocument,
   type MindMapEdgeLineType,
@@ -44,6 +48,7 @@ import { AppNavTasksPages } from "./AppNavTasksPages";
 import {
   Plus,
   Trash,
+  Copy,
   Link as LinkIcon,
   Check,
   ChevronRight,
@@ -56,6 +61,7 @@ import {
   ArrowDownRight,
   Undo,
   Redo,
+  Refresh,
 } from "./Icons";
 
 /** Maximum number of undo/redo steps kept per mind map. */
@@ -261,13 +267,42 @@ type MindMapNodeData = {
   onSelect: (id: string, additive: boolean) => void;
 };
 
+/** Finds the caret position under a point, normalizing the Chromium/Firefox API split. */
+function caretRangeFromPoint(x: number, y: number): Range | null {
+  if (typeof document.caretRangeFromPoint === "function") {
+    return document.caretRangeFromPoint(x, y);
+  }
+  const withFirefoxApi = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+  };
+  const pos = withFirefoxApi.caretPositionFromPoint?.(x, y);
+  if (!pos) return null;
+  const range = document.createRange();
+  range.setStart(pos.offsetNode, pos.offset);
+  range.collapse(true);
+  return range;
+}
+
+/**
+ * Sibling-order badges (nodeId → 1-based position), shown on every node at the same level as the
+ * current selection. Deliberately kept out of React Flow's node state: writing it into `node.data`
+ * meant every selection change pushed a new `nodes` array through React Flow, whose selection
+ * reconciliation could fire `onSelectionChange` back at us and re-enter the update cycle. As
+ * context it's pure read-only view state, so it can't participate in that loop at all.
+ */
+const SiblingBadgeContext = createContext<ReadonlyMap<string, number>>(new Map());
+
 function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
+  const viewportNarrow = useViewportNarrow();
+  const siblingIndex = useContext(SiblingBadgeContext).get(id) ?? null;
   const [editing, setEditing] = useState(false);
   const [editingBody, setEditingBody] = useState(false);
   const [draft, setDraft] = useState(data.label);
   const [bodyDraft, setBodyDraft] = useState(data.body ?? "");
   const inputRef = useRef<HTMLInputElement>(null);
-  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  /** Where the entering click landed, so the caret lands there instead of jumping to the start. */
+  const pendingCaretRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     setDraft(data.label);
@@ -281,15 +316,34 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
     if (editing) inputRef.current?.focus();
   }, [editing]);
 
-  useEffect(() => {
-    if (editingBody) {
-      const el = bodyRef.current;
-      if (!el) return;
-      el.focus();
-      el.style.height = "auto";
-      el.style.height = `${Math.max(el.scrollHeight, 32)}px`;
+  /**
+   * Runs before paint so the body never visibly flashes: fills in the editable div (its content
+   * is otherwise left alone while editing so typing doesn't get clobbered by React re-rendering
+   * `data.body`), then drops the caret at the point the user clicked instead of the start/end.
+   */
+  useLayoutEffect(() => {
+    if (!editingBody) return;
+    const el = bodyRef.current;
+    if (!el) return;
+    el.textContent = data.body ?? "";
+    el.focus();
+    const pending = pendingCaretRef.current;
+    pendingCaretRef.current = null;
+    const selection = window.getSelection();
+    if (!selection) return;
+    const range = pending ? caretRangeFromPoint(pending.x, pending.y) : null;
+    if (range && el.contains(range.startContainer)) {
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return;
     }
-  }, [editingBody]);
+    // Fallback (e.g. entering via double-click on an empty body): caret at the end.
+    const fallback = document.createRange();
+    fallback.selectNodeContents(el);
+    fallback.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(fallback);
+  }, [editingBody, data.body]);
 
   const commit = () => {
     setEditing(false);
@@ -333,6 +387,34 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
           : "0 2px 8px rgba(0,0,0,0.25)",
       }}
     >
+      {siblingIndex != null && (
+        <div
+          style={{
+            position: "absolute",
+            top: -9,
+            left: -9,
+            minWidth: 20,
+            height: 20,
+            borderRadius: 10,
+            background: "#1a56db",
+            color: "#ffffff",
+            fontSize: 11,
+            fontWeight: 800,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "0 5px",
+            pointerEvents: "none",
+            zIndex: 10,
+            lineHeight: 1,
+            boxShadow: "0 0 0 2px #fff, 0 2px 6px rgba(0,0,0,0.45)",
+            letterSpacing: "-0.5px",
+          }}
+        >
+          {siblingIndex}
+        </div>
+      )}
+
       <Handle
         type="target"
         position={Position.Top}
@@ -450,6 +532,14 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
           />
         ) : (
           <span
+            onClick={(e) => {
+              // On desktop, edit right in the node on a plain click instead of selecting it
+              // (selecting would open the detail panel's own textarea). Modifier clicks and
+              // mobile taps fall through to the node's onClick so selection still works there.
+              if (viewportNarrow || e.shiftKey || e.metaKey || e.ctrlKey) return;
+              e.stopPropagation();
+              setEditing(true);
+            }}
             onDoubleClick={(e) => {
               e.stopPropagation();
               setEditing(true);
@@ -493,73 +583,72 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
           onMouseDown={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          {editingBody ? (
-            <textarea
-              ref={bodyRef}
-              value={bodyDraft}
-              onChange={(e) => {
-                setBodyDraft(e.target.value);
-                const el = e.target;
-                el.style.height = "auto";
-                el.style.height = `${Math.max(el.scrollHeight, 32)}px`;
-              }}
-              onBlur={commitBody}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  setBodyDraft(data.body ?? "");
-                  setEditingBody(false);
-                }
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  commitBody();
-                }
-              }}
-              placeholder={isTextOnly ? "Type paragraph text…" : "Add content…"}
-              rows={2}
-              style={{
-                width: "100%",
-                boxSizing: "border-box",
-                background: "rgba(0,0,0,0.18)",
-                border: "1px solid var(--border-color)",
-                borderRadius: 8,
-                color: "var(--text-primary)",
-                fontSize: 11,
-                fontWeight: 400,
-                lineHeight: 1.45,
-                resize: "none",
-                outline: "none",
-                padding: "6px 8px",
-                fontFamily: "inherit",
-                minHeight: 32,
-              }}
-            />
-          ) : (
-            <div
-              onDoubleClick={(e) => {
+          {/*
+           * A single always-mounted element (not a div that swaps to a `<textarea>`) so editing
+           * never changes the node's look — same font/color/no border/no background — and a click
+           * drops the caret exactly where it landed instead of jumping to the start or end.
+           * Content is left alone by React while `editingBody`, so typing can't fight a re-render.
+           */}
+          <div
+            ref={bodyRef}
+            contentEditable={editingBody}
+            suppressContentEditableWarning
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => {
+              if (editingBody) return;
+              e.stopPropagation();
+              pendingCaretRef.current = { x: e.clientX, y: e.clientY };
+              setEditingBody(true);
+            }}
+            onClick={(e) => {
+              if (editingBody) return; // already editing; let the browser place the caret natively
+              if (e.shiftKey || e.metaKey || e.ctrlKey) return;
+              // On desktop, a plain click edits right in the node (whether or not it already
+              // has text) instead of selecting it and switching to the detail panel's own
+              // field. On mobile, keep the existing tap-to-select → detail panel flow except
+              // when the body is empty, where editing inline is still the fastest path.
+              if (!viewportNarrow || !hasBody) {
                 e.stopPropagation();
+                pendingCaretRef.current = { x: e.clientX, y: e.clientY };
                 setEditingBody(true);
-              }}
-              onClick={(e) => {
-                if (!hasBody) {
-                  e.stopPropagation();
-                  setEditingBody(true);
-                }
-              }}
-              style={{
-                fontSize: 11,
-                fontWeight: 400,
-                lineHeight: 1.45,
-                color: hasBody ? "var(--text-secondary)" : "var(--text-muted)",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                cursor: "text",
-                minHeight: hasBody ? undefined : 16,
-                opacity: data.taskCompleted ? 0.55 : 1,
-              }}
-            >
-              {hasBody ? data.body : isTextOnly ? "Type paragraph text…" : "Add content…"}
-            </div>
-          )}
+              }
+            }}
+            onInput={(e) => setBodyDraft(e.currentTarget.innerText)}
+            onBlur={commitBody}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setBodyDraft(data.body ?? "");
+                setEditingBody(false);
+              } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                commitBody();
+              } else if (e.key === "Enter") {
+                e.preventDefault();
+                document.execCommand("insertLineBreak");
+              }
+            }}
+            onPaste={(e) => {
+              e.preventDefault();
+              document.execCommand("insertText", false, e.clipboardData.getData("text/plain"));
+            }}
+            style={{
+              fontSize: 11,
+              fontWeight: 400,
+              lineHeight: 1.45,
+              color: hasBody || editingBody ? "var(--text-secondary)" : "var(--text-muted)",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              cursor: "text",
+              minHeight: hasBody ? undefined : 16,
+              opacity: data.taskCompleted ? 0.55 : 1,
+              outline: "none",
+            }}
+          >
+            {!editingBody &&
+              (hasBody ? data.body : isTextOnly ? "Type paragraph text…" : "Add content…")}
+          </div>
         </div>
       )}
 
@@ -629,6 +718,28 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
 
 const NODE_TYPES: NodeTypes = { mindMapNode: MindMapNodeComponent };
 
+/*
+ * React Flow mirrors several of its props into its internal store from effects keyed on the
+ * prop's identity, so any object/array/function prop rebuilt inline on each render re-fires
+ * those effects every render. These are hoisted (or memoized at the call site) to keep their
+ * identities stable across renders.
+ */
+const PRO_OPTIONS = { hideAttribution: true } as const;
+const FLOW_STYLE: React.CSSProperties = { width: "100%", height: "100%" };
+/** Middle mouse button only — left-drag is reserved for the selection box on desktop. */
+const PAN_ON_DRAG_MIDDLE_ONLY = [1];
+/** Stable empty selection, so clearing an already-empty selection is a no-op instead of a new array. */
+const EMPTY_SELECTION: string[] = [];
+/** How far the user can zoom out — low enough that a large board still fits on screen. */
+const FLOW_MIN_ZOOM = 0.05;
+/** How far the user can zoom in. */
+const FLOW_MAX_ZOOM = 2;
+/**
+ * Initial / Controls "fit view": never zoom in past 100% (a handful of nodes would otherwise
+ * fill the pane), but may zoom out as far as FLOW_MIN_ZOOM so every node stays visible.
+ */
+const FIT_VIEW_OPTIONS = { padding: 0.2, minZoom: FLOW_MIN_ZOOM, maxZoom: 1 } as const;
+
 /* ─── Helpers: MindMapNode[] <-> React Flow nodes/edges ─── */
 
 function toFlowNodes(
@@ -651,6 +762,13 @@ function toFlowNodes(
       id: n.id,
       type: "mindMapNode",
       position: { x: n.x, y: n.y },
+      // Also set React Flow's own top-level `selected` (in addition to the `data.selected`
+      // mirror our custom node component renders from): this array gets fully rebuilt from
+      // canonical map data whenever `selectedNodeIds` changes (including from React Flow's own
+      // drag-selection box), so without this, each rebuild would tell React Flow every node is
+      // deselected, which immediately fires `onSelectionChange` again with an empty selection
+      // and wipes out the box selection the user just made.
+      selected: selectedSet.has(n.id),
       data: {
         label: linkedTask ? (linkedTask.title || n.label) : n.label,
         body: n.body ?? "",
@@ -860,6 +978,9 @@ function NodeDetailPanel({
   linkedTask,
   onClose,
   onUpdateNode,
+  onMoveNode,
+  canMoveUp,
+  canMoveDown,
   onToggleComplete,
   onToggleBoardVisibility,
   onImportLinkedSubtasks,
@@ -870,6 +991,9 @@ function NodeDetailPanel({
   linkedTask: TaskItem | undefined;
   onClose: () => void;
   onUpdateNode: (id: string, patch: Partial<MindMapNode>) => void;
+  onMoveNode: (id: string, direction: "up" | "down") => void;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
   onToggleComplete: () => void;
   onToggleBoardVisibility: () => void;
   onImportLinkedSubtasks: () => string;
@@ -1003,6 +1127,59 @@ function NodeDetailPanel({
             gap: 14,
           }}
         >
+          {/* Doc order — move this node earlier/later in the Google Doc export */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ ...LBL, marginBottom: 0 }}>Doc order</div>
+            <div style={{ display: "flex", gap: 4 }}>
+              <button
+                type="button"
+                title="Move earlier in Doc"
+                disabled={!canMoveUp}
+                onClick={() => onMoveNode(node.id, "up")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 28,
+                  height: 28,
+                  borderRadius: 6,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-tertiary)",
+                  color: canMoveUp ? "var(--text-primary)" : "var(--text-muted)",
+                  cursor: canMoveUp ? "pointer" : "not-allowed",
+                  opacity: canMoveUp ? 1 : 0.4,
+                  padding: 0,
+                }}
+              >
+                <span style={{ display: "inline-flex", transform: "rotate(180deg)" }}>
+                  <ChevronDown size={14} />
+                </span>
+              </button>
+              <button
+                type="button"
+                title="Move later in Doc"
+                disabled={!canMoveDown}
+                onClick={() => onMoveNode(node.id, "down")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 28,
+                  height: 28,
+                  borderRadius: 6,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-tertiary)",
+                  color: canMoveDown ? "var(--text-primary)" : "var(--text-muted)",
+                  cursor: canMoveDown ? "pointer" : "not-allowed",
+                  opacity: canMoveDown ? 1 : 0.4,
+                  padding: 0,
+                }}
+              >
+                <ChevronDown size={14} />
+              </button>
+            </div>
+          </div>
+
           {/* Label / title (text nodes have no title — they render as a bodiless paragraph) */}
           {node.kind !== "text" && (
             <div>
@@ -1800,8 +1977,13 @@ export default function MindMapsView() {
   const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
   /** Bounding box of the canvas pane, used to find the screen-space center of the current view. */
   const canvasWrapperRef = useRef<HTMLDivElement>(null);
-  /** While dragging a node that's part of a multi-selection, tracks the group so the rest can be dragged along. */
-  const dragGroupRef = useRef<{ ids: string[]; last: { x: number; y: number } } | null>(null);
+  /**
+   * Snapshot taken when a drag starts: which node ids move together (the dragged node,
+   * plus the rest of a multi-selection if it's part of one) and each one's starting
+   * position. Used both to mirror group movement and to lock the drag to a single axis
+   * while Shift is held (measured from these start positions, not frame-to-frame deltas).
+   */
+  const dragAnchorRef = useRef<{ ids: string[]; start: Map<string, { x: number; y: number }> } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const viewportNarrow = useViewportNarrow();
   /** Auto-collapse the sidebar the first time we detect a narrow viewport, without fighting later manual toggles. */
@@ -1842,6 +2024,23 @@ export default function MindMapsView() {
     [selectedMap, selectedNodeId],
   );
 
+  /** Position of `selectedNode` within its sibling group (sorted by Doc order). */
+  const selectedNodeSiblingIndex = useMemo(() => {
+    if (!selectedNode || !selectedMap) return -1;
+    const siblings = selectedMap.nodes
+      .filter((n) => n.parentId === selectedNode.parentId)
+      .sort(compareMindMapSiblings);
+    return siblings.findIndex((n) => n.id === selectedNode.id);
+  }, [selectedNode, selectedMap]);
+
+  const selectedNodeSiblingCount = useMemo(() => {
+    if (!selectedNode || !selectedMap) return 0;
+    return selectedMap.nodes.filter((n) => n.parentId === selectedNode.parentId).length;
+  }, [selectedNode, selectedMap]);
+
+  const canMoveUp = selectedNodeSiblingIndex > 0;
+  const canMoveDown = selectedNodeSiblingIndex >= 0 && selectedNodeSiblingIndex < selectedNodeSiblingCount - 1;
+
   const selectedLinkedTask = useMemo(
     () => (selectedNode?.taskId ? taskMap.get(selectedNode.taskId) : undefined),
     [selectedNode, taskMap],
@@ -1877,6 +2076,15 @@ export default function MindMapsView() {
 
   const mapEdgeDefault = mapDefaultEdgeLineType(selectedMap);
 
+  const defaultEdgeOptions = useMemo(
+    () => ({
+      type: mapEdgeDefault,
+      style: { strokeWidth: 2 },
+      markerEnd: { type: MarkerType.ArrowClosed },
+    }),
+    [mapEdgeDefault],
+  );
+
   /* ─── callbacks wired into nodes ─── */
 
   const currentMapRef = useRef<MindMapDocument | null>(null);
@@ -1898,6 +2106,10 @@ export default function MindMapsView() {
     onToggleComplete: () => {},
     onSelect: () => {},
   });
+
+  /** Latest selection, read (not depended on) by effects that rebuild flow nodes from map data. */
+  const selectedNodeIdsRef = useRef<string[]>([]);
+  selectedNodeIdsRef.current = selectedNodeIds;
 
   /* ─── Undo/redo history ─── */
 
@@ -1964,10 +2176,12 @@ export default function MindMapsView() {
           return;
         }
         lastAutoSyncedAtRef.current.set(map.id, map.updatedAt);
-        setGoogleDocMessage({
-          text: `${opts?.silent ? "Auto-synced" : "Pushed"} to "${data.documentTitle ?? "Google Doc"}".`,
-          error: false,
-        });
+        if (!opts?.silent) {
+          setGoogleDocMessage({
+            text: `Pushed to "${data.documentTitle ?? "Google Doc"}".`,
+            error: false,
+          });
+        }
       } catch {
         setGoogleDocMessage({ text: "Network error.", error: true });
       } finally {
@@ -1992,6 +2206,13 @@ export default function MindMapsView() {
     },
     [upsertMap],
   );
+
+  /** Dismiss a successful (non-error) sync toast after a few seconds so it doesn't linger over the canvas. */
+  useEffect(() => {
+    if (!googleDocMessage || googleDocMessage.error) return;
+    const timer = setTimeout(() => setGoogleDocMessage(null), 4000);
+    return () => clearTimeout(timer);
+  }, [googleDocMessage]);
 
   /** Every 30s, push the open map to its Google Doc if auto-sync is on and it changed since the last push. */
   useEffect(() => {
@@ -2264,8 +2485,39 @@ export default function MindMapsView() {
 
   const onEdgeClick = useCallback((event: React.MouseEvent, edge: Edge) => {
     event.stopPropagation();
-    setSelectedNodeIds([]);
+    setSelectedNodeIds((prev) => (prev.length === 0 ? prev : EMPTY_SELECTION));
     setSelectedEdgeId((prev) => (prev === edge.id ? null : edge.id));
+  }, []);
+
+  const onPaneClick = useCallback(() => {
+    setSelectedNodeIds((prev) => (prev.length === 0 ? prev : EMPTY_SELECTION));
+    setSelectedEdgeId(null);
+    setConnectNote(null);
+  }, []);
+
+  const onFlowInit = useCallback((instance: ReactFlowInstance) => {
+    reactFlowInstanceRef.current = instance;
+  }, []);
+
+  /**
+   * Box-select only. `onSelectionChange` is a store subscription that fires whenever React
+   * Flow's selected-id set changes — including when we write `node.selected` ourselves. Wiring
+   * that callback back into `selectedNodeIds` (which then rewrites `node.selected`) is a closed
+   * loop and the source of the "Maximum update depth exceeded" crash. `onSelectionEnd` runs
+   * once, when the user finishes a selection drag, so it cannot re-enter.
+   */
+  const onSelectionEnd = useCallback(() => {
+    const instance = reactFlowInstanceRef.current;
+    const nextIds = instance
+      ? instance.getNodes().filter((n) => n.selected).map((n) => n.id)
+      : [];
+    setSelectedNodeIds((prev) => {
+      if (prev.length === nextIds.length && prev.every((id) => nextIds.includes(id))) {
+        return prev;
+      }
+      return nextIds;
+    });
+    setSelectedEdgeId(null);
   }, []);
 
   const nodeCallbacks = useMemo(
@@ -2293,6 +2545,7 @@ export default function MindMapsView() {
         y: (parent?.y ?? 0) + siblings.length * 70,
         label: "",
         url: addKind === "artifact" ? "" : null,
+        outlineColor: parent?.outlineColor ?? null,
       };
       const next = [...mapNodes, child];
       const map = currentMapRef.current;
@@ -2367,16 +2620,57 @@ export default function MindMapsView() {
 
   /* ─── Sync flow nodes when selected map changes ─── */
 
+  /**
+   * Deliberately does NOT depend on `selectedNodeIds`: rebuilding every node from canonical map
+   * data discards React Flow's per-node `measured` dimensions (new object references lose the
+   * library's internal measurement cache), forcing a re-measure. Since this effect previously
+   * re-ran on every selection change (including drag-box selection), that churn raced with React
+   * Flow's own selection bookkeeping and could wipe out a selection right after it was made. The
+   * effect below handles selection syncing on the existing node objects instead.
+   */
   useEffect(() => {
     if (!selectedMap) {
       setNodes([]);
       setEdges([]);
       return;
     }
-    setNodes(toFlowNodes(selectedMap.nodes, fullCallbacks, taskMap, selectedNodeIds));
+    setNodes(toFlowNodes(selectedMap.nodes, fullCallbacks, taskMap, selectedNodeIdsRef.current));
     setEdges(toFlowEdges(selectedMap.nodes, mapDefaultEdgeLineType(selectedMap)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedMapId, selectedMap?.updatedAt, selectedMap?.nodes.length, taskMap, selectedNodeIds]);
+  }, [selectedMapId, selectedMap?.updatedAt, selectedMap?.nodes.length, taskMap]);
+
+  /** Mirrors `selectedNodeIds` onto the existing flow nodes without recreating them (see note above). */
+  useEffect(() => {
+    const selectedSet = new Set(selectedNodeIds);
+    setNodes((nds) => {
+      let changed = false;
+      const next = nds.map((n) => {
+        const isSelected = selectedSet.has(n.id);
+        if (n.selected === isSelected && n.data.selected === isSelected) return n;
+        changed = true;
+        return { ...n, selected: isSelected, data: { ...n.data, selected: isSelected } };
+      });
+      return changed ? next : nds;
+    });
+  }, [selectedNodeIds, setNodes]);
+
+  /**
+   * Sibling-order badges for the current selection, derived straight from canonical map data.
+   * Being a derived value rather than node state, it stays correct after a reorder (the map's
+   * node list is a dependency) and never feeds back into React Flow's update cycle.
+   */
+  const siblingBadges = useMemo(() => {
+    const badges = new Map<string, number>();
+    if (selectedNodeIds.length !== 1) return badges;
+    const mapNodes = selectedMap?.nodes ?? [];
+    const selectedMapNode = mapNodes.find((n) => n.id === selectedNodeIds[0]);
+    if (!selectedMapNode) return badges;
+    mapNodes
+      .filter((n) => n.parentId === selectedMapNode.parentId)
+      .sort(compareMindMapSiblings)
+      .forEach((n, i) => badges.set(n.id, i + 1));
+    return badges;
+  }, [selectedNodeIds, selectedMap?.nodes]);
 
   /* ─── Handle initial deep links ─── */
 
@@ -2414,50 +2708,78 @@ export default function MindMapsView() {
 
   /* ─── Persist position changes on drag end ─── */
 
-  /** When starting a drag on a node that's part of a multi-selection, remember the group so it moves together. */
+  /** Remembers every node that will move in this drag (the dragged node, plus the rest of a multi-selection) and where each started, for group mirroring and Shift axis-locking. */
   const onNodeDragStart = useCallback(
-    (_: React.MouseEvent, node: Node) => {
-      dragGroupRef.current =
+    (_: MouseEvent | TouchEvent, node: Node) => {
+      const ids =
         selectedNodeIds.length > 1 && selectedNodeIds.includes(node.id)
-          ? { ids: selectedNodeIds, last: { x: node.position.x, y: node.position.y } }
-          : null;
+          ? selectedNodeIds
+          : [node.id];
+      const start = new Map<string, { x: number; y: number }>();
+      for (const id of ids) {
+        const n = id === node.id ? node : nodes.find((nn) => nn.id === id);
+        if (n) start.set(id, { x: n.position.x, y: n.position.y });
+      }
+      dragAnchorRef.current = { ids, start };
+      // `selectNodesOnDrag={false}` on <ReactFlow> means the library won't autonomously select
+      // a node when a drag begins (which was causing a competing-selection feedback loop).
+      // We replicate the expected "dragging selects the node" UX ourselves here, unless it's
+      // already part of an active multi-selection (in which case the whole group moves together).
+      if (ids.length === 1 && ids[0] === node.id && !selectedNodeIds.includes(node.id)) {
+        setSelectedNodeIds([node.id]);
+        setSelectedEdgeId(null);
+      }
     },
-    [selectedNodeIds],
+    [selectedNodeIds, nodes],
   );
 
-  /** Mirrors the dragged node's movement onto the rest of the selected group in real time. */
+  /**
+   * Mirrors the dragged node's movement onto the rest of the selected group in real time.
+   * While Shift is held, movement is locked to whichever axis has moved further from the
+   * drag's start position — the other axis snaps back to where it started.
+   */
   const onNodeDrag = useCallback(
-    (_: React.MouseEvent, node: Node) => {
-      const group = dragGroupRef.current;
-      if (!group || !group.ids.includes(node.id)) return;
-      const dx = node.position.x - group.last.x;
-      const dy = node.position.y - group.last.y;
-      if (dx === 0 && dy === 0) return;
-      group.last = { x: node.position.x, y: node.position.y };
-      const otherIds = new Set(group.ids.filter((id) => id !== node.id));
+    (event: MouseEvent | TouchEvent, node: Node) => {
+      const anchor = dragAnchorRef.current;
+      if (!anchor) return;
+      const startPos = anchor.start.get(node.id);
+      if (!startPos) return;
+
+      let dx = node.position.x - startPos.x;
+      let dy = node.position.y - startPos.y;
+      if ("shiftKey" in event && event.shiftKey) {
+        if (Math.abs(dx) >= Math.abs(dy)) dy = 0;
+        else dx = 0;
+      }
+
       setNodes((nds) =>
-        nds.map((n) =>
-          otherIds.has(n.id)
-            ? { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
-            : n,
-        ),
+        nds.map((n) => {
+          const s = anchor.start.get(n.id);
+          if (!s) return n;
+          const pos = { x: s.x + dx, y: s.y + dy };
+          if (n.position.x === pos.x && n.position.y === pos.y) return n;
+          return { ...n, position: pos };
+        }),
       );
     },
     [setNodes],
   );
 
   const onNodeDragStop = useCallback(
-    (_: React.MouseEvent, node: Node) => {
-      const group = dragGroupRef.current;
+    (_: MouseEvent | TouchEvent, node: Node) => {
+      const anchor = dragAnchorRef.current;
       const groupIds = new Set(
-        group && group.ids.includes(node.id) ? group.ids : [node.id],
+        anchor && anchor.ids.includes(node.id) ? anchor.ids : [node.id],
       );
-      dragGroupRef.current = null;
+      dragAnchorRef.current = null;
+      // Read every member's position back from state rather than the event's `node.position`:
+      // while Shift-constraining, our own onNodeDrag override — not React Flow's raw free
+      // position — holds the final, axis-locked coordinate.
       const latestPositions = new Map(nodes.map((n) => [n.id, n.position]));
       const mapNodes = getLatestMapNodes();
       const next = mapNodes.map((n) => {
         if (!groupIds.has(n.id)) return n;
-        const pos = n.id === node.id ? node.position : latestPositions.get(n.id);
+        const pos = latestPositions.get(n.id);
         return pos ? { ...n, x: pos.x, y: pos.y } : n;
       });
       scheduleSave(next);
@@ -2618,6 +2940,40 @@ export default function MindMapsView() {
     [deleteMap, selectedMapId],
   );
 
+  const handleDuplicateMap = useCallback(
+    (source: MindMapDocument) => {
+      // Re-map all node IDs so the duplicate is fully independent of the original.
+      const idMap = new Map<string, string>();
+      const newNodes: MindMapNode[] = source.nodes.map((n) => {
+        const newNodeId = newId();
+        idMap.set(n.id, newNodeId);
+        return { ...n, id: newNodeId };
+      });
+      // Remap parentId references to the new IDs.
+      const remappedNodes = newNodes.map((n) => ({
+        ...n,
+        parentId: n.parentId ? (idMap.get(n.parentId) ?? n.parentId) : null,
+      }));
+      const duplicate: MindMapDocument = {
+        ...source,
+        id: newId(),
+        title: `${source.title} (copy)`,
+        nodes: remappedNodes,
+        rootNodeId: source.rootNodeId ? (idMap.get(source.rootNodeId) ?? null) : null,
+        // A copy starts unlinked: sharing the original's Doc would make both maps overwrite it,
+        // and sharing its anchor task would make task deep-links ambiguous between the two.
+        googleDocUrl: null,
+        googleDocAutoSync: false,
+        anchorTaskId: null,
+        updatedAt: new Date().toISOString(),
+      };
+      upsertMap(duplicate);
+      setSelectedMapId(duplicate.id);
+      setSelectedNodeIds([]);
+    },
+    [upsertMap],
+  );
+
   /** Flow-space position for the middle of the currently visible canvas (falls back to a fixed spot before the pane has mounted/initialized). */
   const getViewportCenter = useCallback((): { x: number; y: number } => {
     const instance = reactFlowInstanceRef.current;
@@ -2744,6 +3100,49 @@ export default function MindMapsView() {
     [getLatestMapNodes, upsertMap, setNodes, setEdges],
   );
 
+  /**
+   * Moves a node one position earlier ("up") or later ("down") within its sibling group for
+   * Google Doc export ordering, without moving it visually on the canvas.
+   *
+   * On the first move for a sibling group, sequential `order` values are materialised from the
+   * current effective order (explicit values first, y/x position as tiebreaker) so subsequent
+   * moves are simple integer swaps rather than requiring position re-inference.
+   */
+  const moveNode = useCallback(
+    (id: string, direction: "up" | "down") => {
+      const allNodes = getLatestMapNodes();
+      const target = allNodes.find((n) => n.id === id);
+      if (!target) return;
+
+      const siblings = allNodes
+        .filter((n) => n.parentId === target.parentId)
+        .sort(compareMindMapSiblings);
+
+      const idx = siblings.findIndex((n) => n.id === id);
+      if (direction === "up" && idx <= 0) return;
+      if (direction === "down" && idx >= siblings.length - 1) return;
+
+      // Swap with the adjacent sibling in the sorted sequence, then assign sequential
+      // `order` values to the whole group so future moves are unambiguous.
+      const newOrder = [...siblings];
+      const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+      [newOrder[idx], newOrder[swapIdx]] = [newOrder[swapIdx], newOrder[idx]];
+
+      const orderById = new Map(newOrder.map((n, i) => [n.id, i]));
+      const next = allNodes.map((n) =>
+        orderById.has(n.id) ? { ...n, order: orderById.get(n.id) } : n,
+      );
+
+      const map = currentMapRef.current;
+      if (map) {
+        const updated = { ...map, nodes: next, updatedAt: new Date().toISOString() };
+        currentMapRef.current = updated;
+        upsertMap(updated);
+      }
+    },
+    [getLatestMapNodes, upsertMap],
+  );
+
   /** Detaches the currently-selected connector's child node from its parent (removes the arrow). */
   const deleteSelectedEdge = useCallback(() => {
     if (!selectedEdgeChildNode) return;
@@ -2835,6 +3234,8 @@ export default function MindMapsView() {
 
   const [renamingMapId, setRenamingMapId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [confirmDeleteMapId, setConfirmDeleteMapId] = useState<string | null>(null);
+  const confirmDeleteMap = maps.find((m) => m.id === confirmDeleteMapId);
 
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
@@ -2985,10 +3386,34 @@ export default function MindMapsView() {
                 )}
                 <button
                   type="button"
+                  title="Duplicate map"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDuplicateMap(m);
+                  }}
+                  style={{
+                    flexShrink: 0,
+                    width: 20,
+                    height: 20,
+                    borderRadius: 4,
+                    border: "none",
+                    background: "transparent",
+                    color: "var(--text-muted)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    padding: 0,
+                  }}
+                >
+                  <Copy size={12} />
+                </button>
+                <button
+                  type="button"
                   title="Delete map"
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleDeleteMap(m.id);
+                    setConfirmDeleteMapId(m.id);
                   }}
                   style={{
                     flexShrink: 0,
@@ -3328,29 +3753,70 @@ export default function MindMapsView() {
                 </button>
               )}
 
-              <button
-                type="button"
-                onClick={() => {
-                  setGoogleDocUrlInput(selectedMap.googleDocUrl ?? "");
-                  setGoogleDocMessage(null);
-                  setGoogleDocPanelOpen((o) => !o);
-                }}
-                title="Sync this map's outline into a Google Doc"
+              <div
                 style={{
-                  fontSize: 12,
-                  padding: "4px 10px",
+                  display: "inline-flex",
+                  alignItems: "stretch",
                   borderRadius: 6,
                   border: `1px solid ${googleDocPanelOpen ? "var(--accent-blue)" : "var(--border-color)"}`,
+                  overflow: "hidden",
                   background: "var(--bg-secondary)",
-                  color: googleDocPanelOpen ? "var(--accent-blue)" : "var(--text-primary)",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 4,
                 }}
               >
-                <FileText size={12} /> Google Doc
-              </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGoogleDocUrlInput(selectedMap.googleDocUrl ?? "");
+                    setGoogleDocMessage(null);
+                    setGoogleDocPanelOpen((o) => !o);
+                  }}
+                  title="Open Google Doc sync settings"
+                  style={{
+                    fontSize: 12,
+                    padding: "4px 10px",
+                    border: "none",
+                    borderRight: "1px solid var(--border-color)",
+                    borderRadius: 0,
+                    background: "transparent",
+                    color: googleDocPanelOpen ? "var(--accent-blue)" : "var(--text-primary)",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
+                >
+                  <FileText size={12} /> Google Doc
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleGoogleDocPush();
+                  }}
+                  disabled={googleDocPushing}
+                  title={
+                    !(selectedMap.googleDocUrl ?? "").trim()
+                      ? "Save a Doc URL first"
+                      : googleDocPushing
+                        ? "Pushing…"
+                        : "Push outline to Google Doc"
+                  }
+                  style={{
+                    padding: "4px 8px",
+                    border: "none",
+                    borderRadius: 0,
+                    background: "transparent",
+                    color: googleDocPanelOpen ? "var(--accent-blue)" : "var(--text-primary)",
+                    cursor: googleDocPushing ? "wait" : "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    opacity: googleDocPushing || !(selectedMap.googleDocUrl ?? "").trim() ? 0.45 : 1,
+                  }}
+                >
+                  <Refresh size={12} />
+                </button>
+              </div>
             </div>
 
             {googleDocPanelOpen && (
@@ -3478,6 +3944,47 @@ export default function MindMapsView() {
               </div>
             )}
 
+            {!googleDocPanelOpen && googleDocMessage && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 48,
+                  left: sidebarOpen && !viewportNarrow ? 10 : 52,
+                  right: viewportNarrow ? 10 : undefined,
+                  zIndex: 11,
+                  maxWidth: viewportNarrow ? undefined : 320,
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-secondary)",
+                  boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
+                  fontSize: 11,
+                  lineHeight: 1.4,
+                  color: googleDocMessage.error ? "var(--accent-red, #ef4444)" : "var(--accent-green, #22c55e)",
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 8,
+                }}
+              >
+                <span style={{ flex: 1 }}>{googleDocMessage.text}</span>
+                <button
+                  type="button"
+                  onClick={() => setGoogleDocMessage(null)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "var(--text-muted)",
+                    cursor: "pointer",
+                    fontSize: 14,
+                    lineHeight: 1,
+                    padding: 0,
+                  }}
+                >
+                  &times;
+                </button>
+              </div>
+            )}
+
             {connectNote && (
               <div
                 style={{
@@ -3517,6 +4024,7 @@ export default function MindMapsView() {
               </div>
             )}
 
+            <SiblingBadgeContext.Provider value={siblingBadges}>
             <ReactFlow
               nodes={nodes}
               edges={displayEdges}
@@ -3527,24 +4035,27 @@ export default function MindMapsView() {
               onNodeDragStop={onNodeDragStop}
               onConnect={onConnect}
               onEdgeClick={onEdgeClick}
+              onSelectionEnd={onSelectionEnd}
               isValidConnection={isValidConnection}
               nodeTypes={NODE_TYPES}
-              defaultEdgeOptions={{
-                type: mapEdgeDefault,
-                style: { strokeWidth: 2 },
-                markerEnd: { type: MarkerType.ArrowClosed },
-              }}
-              onPaneClick={() => {
-                setSelectedNodeIds([]);
-                setSelectedEdgeId(null);
-                setConnectNote(null);
-              }}
-              onInit={(instance) => {
-                reactFlowInstanceRef.current = instance;
-              }}
+              /*
+               * Desktop: left-click-drag on empty canvas draws a selection box instead of panning;
+               * only the middle mouse button pans. Touch is untouched either way — React Flow only
+               * restricts `mousedown`-triggered panning by button, so a finger drag still pans on
+               * mobile regardless of this setting.
+               */
+              panOnDrag={viewportNarrow ? true : PAN_ON_DRAG_MIDDLE_ONLY}
+              selectionOnDrag={!viewportNarrow}
+              selectNodesOnDrag={false}
+              defaultEdgeOptions={defaultEdgeOptions}
+              onPaneClick={onPaneClick}
+              onInit={onFlowInit}
               fitView
-              proOptions={{ hideAttribution: true }}
-              style={{ width: "100%", height: "100%" }}
+              fitViewOptions={FIT_VIEW_OPTIONS}
+              minZoom={FLOW_MIN_ZOOM}
+              maxZoom={FLOW_MAX_ZOOM}
+              proOptions={PRO_OPTIONS}
+              style={FLOW_STYLE}
             >
               <Background gap={24} color="var(--border-subtle)" />
               <Controls
@@ -3568,6 +4079,7 @@ export default function MindMapsView() {
                 />
               )}
             </ReactFlow>
+            </SiblingBadgeContext.Provider>
           </>
         ) : (
           <div
@@ -3596,6 +4108,9 @@ export default function MindMapsView() {
           linkedTask={selectedLinkedTask}
           onClose={() => setSelectedNodeIds([])}
           onUpdateNode={onUpdateNode}
+          onMoveNode={moveNode}
+          canMoveUp={canMoveUp}
+          canMoveDown={canMoveDown}
           onToggleComplete={onDetailToggleComplete}
           onToggleBoardVisibility={onDetailToggleBoardVisibility}
           onImportLinkedSubtasks={onDetailImportLinkedSubtasks}
@@ -3611,6 +4126,96 @@ export default function MindMapsView() {
           onClose={() => setSelectedEdgeId(null)}
         />
       ) : null}
+
+      {/* ── Delete-map confirmation modal ── */}
+      {confirmDeleteMap && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-map-title"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 200,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          {/* backdrop */}
+          <div
+            onClick={() => setConfirmDeleteMapId(null)}
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: "rgba(0,0,0,0.55)",
+            }}
+          />
+          {/* card */}
+          <div
+            style={{
+              position: "relative",
+              background: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 12,
+              padding: "24px 28px",
+              maxWidth: 380,
+              width: "calc(100vw - 48px)",
+              boxShadow: "0 8px 32px rgba(0,0,0,0.45)",
+            }}
+          >
+            <h2
+              id="delete-map-title"
+              style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}
+            >
+              Delete mind map?
+            </h2>
+            <p style={{ margin: "0 0 24px", fontSize: 13, color: "var(--text-muted)", lineHeight: 1.5 }}>
+              <strong style={{ color: "var(--text-primary)" }}>
+                &ldquo;{confirmDeleteMap.title || "Untitled Map"}&rdquo;
+              </strong>{" "}
+              will be permanently deleted. This cannot be undone.
+            </p>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteMapId(null)}
+                style={{
+                  padding: "7px 16px",
+                  borderRadius: 7,
+                  border: "1px solid var(--border-color)",
+                  background: "transparent",
+                  color: "var(--text-primary)",
+                  fontSize: 13,
+                  cursor: "pointer",
+                  fontWeight: 500,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  handleDeleteMap(confirmDeleteMap.id);
+                  setConfirmDeleteMapId(null);
+                }}
+                style={{
+                  padding: "7px 16px",
+                  borderRadius: 7,
+                  border: "none",
+                  background: "#e03131",
+                  color: "#fff",
+                  fontSize: 13,
+                  cursor: "pointer",
+                  fontWeight: 600,
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -90,3 +90,134 @@ export interface MindMapsEnvironment {
 export const DEFAULT_MIND_MAPS_ENVIRONMENT: MindMapsEnvironment = {
   maps: [],
 };
+
+/** Marker written into downloaded mind-map files so imports can validate the payload. */
+export const MIND_MAP_FILE_FORMAT = "abundance-mind-map" as const;
+export const MIND_MAP_FILE_VERSION = 1 as const;
+
+export interface MindMapFilePayload {
+  format: typeof MIND_MAP_FILE_FORMAT;
+  version: typeof MIND_MAP_FILE_VERSION;
+  exportedAt: string;
+  map: MindMapDocument;
+}
+
+/**
+ * Merges a local mind-map list with the server copy using last-write-wins per map (`updatedAt`).
+ * Maps absent from `remote` are treated as deleted on the server and dropped from the result.
+ */
+export function mergeMapsLastWriteWins(
+  local: MindMapDocument[],
+  remote: MindMapDocument[],
+): MindMapDocument[] {
+  const localById = new Map(local.map((m) => [m.id, m]));
+  return remote.map((remoteMap) => {
+    const localMap = localById.get(remoteMap.id);
+    if (!localMap || Date.parse(remoteMap.updatedAt) >= Date.parse(localMap.updatedAt)) {
+      return remoteMap;
+    }
+    return localMap;
+  });
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function isMindMapNode(v: unknown): v is MindMapNode {
+  if (!isRecord(v)) return false;
+  return (
+    typeof v.id === "string" &&
+    (v.parentId === null || typeof v.parentId === "string") &&
+    typeof v.kind === "string" &&
+    typeof v.x === "number" &&
+    typeof v.y === "number" &&
+    typeof v.label === "string"
+  );
+}
+
+function isMindMapDocument(v: unknown): v is MindMapDocument {
+  if (!isRecord(v)) return false;
+  return (
+    typeof v.id === "string" &&
+    typeof v.title === "string" &&
+    Array.isArray(v.nodes) &&
+    v.nodes.every(isMindMapNode) &&
+    typeof v.updatedAt === "string"
+  );
+}
+
+/** Builds the JSON string written when the user downloads a mind map. */
+export function serializeMindMapFile(map: MindMapDocument): string {
+  const payload: MindMapFilePayload = {
+    format: MIND_MAP_FILE_FORMAT,
+    version: MIND_MAP_FILE_VERSION,
+    exportedAt: new Date().toISOString(),
+    map,
+  };
+  return `${JSON.stringify(payload, null, 2)}\n`;
+}
+
+/**
+ * Parses a downloaded mind-map file. Accepts the versioned envelope or a bare `MindMapDocument`
+ * for convenience. Throws with a short user-facing message on invalid input.
+ */
+export function parseMindMapFile(raw: string): MindMapDocument {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("That file is not valid JSON.");
+  }
+  if (isRecord(parsed) && parsed.format === MIND_MAP_FILE_FORMAT) {
+    if (!isMindMapDocument(parsed.map)) {
+      throw new Error("That mind-map file is missing or has invalid map data.");
+    }
+    return parsed.map;
+  }
+  if (isMindMapDocument(parsed)) return parsed;
+  throw new Error("That file is not a recognized mind-map export.");
+}
+
+/**
+ * Clones a map with fresh document/node IDs (and remapped parent/root links) so an import
+ * never collides with an existing board. External bindings (Google Doc, anchor task) are cleared
+ * the same way as duplicate — visual structure, text, colors, and connectors are kept.
+ */
+export function cloneMindMapForImport(
+  source: MindMapDocument,
+  newId: () => string,
+): MindMapDocument {
+  const idMap = new Map<string, string>();
+  const remappedNodes: MindMapNode[] = source.nodes.map((n) => {
+    const id = newId();
+    idMap.set(n.id, id);
+    return { ...n, id };
+  });
+  const nodes = remappedNodes.map((n) => ({
+    ...n,
+    parentId: n.parentId ? (idMap.get(n.parentId) ?? null) : null,
+  }));
+  return {
+    ...source,
+    id: newId(),
+    title: source.title?.trim() ? source.title : "Imported Map",
+    nodes,
+    rootNodeId: source.rootNodeId ? (idMap.get(source.rootNodeId) ?? null) : null,
+    googleDocUrl: null,
+    googleDocAutoSync: false,
+    anchorTaskId: null,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/** Safe filename stem from a map title (no path separators or reserved characters). */
+export function mindMapDownloadFilename(title: string): string {
+  const stem =
+    title
+      .trim()
+      .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, "")
+      .replace(/\s+/g, " ")
+      .slice(0, 80) || "mind-map";
+  return `${stem}.abundance-mindmap.json`;
+}

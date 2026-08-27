@@ -34,8 +34,12 @@ import { useSearchParams } from "next/navigation";
 import { useMindMaps, useTasks } from "@/lib/hooks";
 import { useViewportNarrow } from "@/lib/useViewportNarrow";
 import {
+  cloneMindMapForImport,
   compareMindMapSiblings,
   DEFAULT_MIND_MAP_EDGE_LINE_TYPE,
+  mindMapDownloadFilename,
+  parseMindMapFile,
+  serializeMindMapFile,
   type MindMapDocument,
   type MindMapEdgeLineType,
   type MindMapLinkSide,
@@ -62,10 +66,18 @@ import {
   Undo,
   Redo,
   Refresh,
+  Download,
+  Upload,
 } from "./Icons";
 
 /** Maximum number of undo/redo steps kept per mind map. */
 const MAX_HISTORY = 15;
+/** While a node is being edited, persist typed text this often (ms) instead of only on blur. */
+const TEXT_LIVE_SAVE_MS = 1000;
+/** How often to pull mind maps from the server on other devices (last-write-wins). */
+const MIND_MAP_POLL_MS = 15_000;
+
+type NodeTextPersistOpts = { live?: boolean };
 
 const EDGE_COLORS = [
   "var(--accent-blue)",
@@ -259,12 +271,13 @@ type MindMapNodeData = {
   taskId?: string | null;
   taskCompleted?: boolean;
   selected?: boolean;
-  onLabelChange: (id: string, label: string) => void;
-  onBodyChange: (id: string, body: string) => void;
+  onLabelChange: (id: string, label: string, opts?: NodeTextPersistOpts) => void;
+  onBodyChange: (id: string, body: string, opts?: NodeTextPersistOpts) => void;
   onAddChild: (id: string) => void;
   onDelete: (id: string) => void;
   onToggleComplete: (id: string) => void;
   onSelect: (id: string, additive: boolean) => void;
+  onInlineEditChange: (id: string, editing: boolean) => void;
 };
 
 /** Finds the caret position under a point, normalizing the Chromium/Firefox API split. */
@@ -281,6 +294,58 @@ function caretRangeFromPoint(x: number, y: number): Range | null {
   range.setStart(pos.offsetNode, pos.offset);
   range.collapse(true);
   return range;
+}
+
+/** Expands a character offset to the non-whitespace word around it. */
+function wordOffsetsInText(text: string, offset: number): { start: number; end: number } {
+  let start = Math.max(0, Math.min(offset, text.length));
+  let end = start;
+  while (start > 0 && /\S/.test(text[start - 1]!)) start--;
+  while (end < text.length && /\S/.test(text[end]!)) end++;
+  return { start, end };
+}
+
+/** Selects the word under `(x, y)` inside `root` (contentEditable or static text). */
+function selectWordAtPoint(x: number, y: number, root: HTMLElement): boolean {
+  const hit = caretRangeFromPoint(x, y);
+  if (!hit || !root.contains(hit.startContainer)) return false;
+  if (hit.startContainer.nodeType !== Node.TEXT_NODE) return false;
+  const text = hit.startContainer.textContent ?? "";
+  const { start, end } = wordOffsetsInText(text, hit.startOffset);
+  if (start >= end) return false;
+  const wordRange = document.createRange();
+  wordRange.setStart(hit.startContainer, start);
+  wordRange.setEnd(hit.startContainer, end);
+  const selection = window.getSelection();
+  if (!selection) return false;
+  selection.removeAllRanges();
+  selection.addRange(wordRange);
+  return true;
+}
+
+/** Maps a horizontal click position to a character index in an `<input>` value. */
+function caretIndexInInput(input: HTMLInputElement, clientX: number): number {
+  const value = input.value;
+  if (!value) return 0;
+  const rect = input.getBoundingClientRect();
+  const style = window.getComputedStyle(input);
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return value.length;
+  ctx.font = style.font;
+  const padL = Number.parseFloat(style.paddingLeft) || 0;
+  const relX = Math.max(0, clientX - rect.left - padL);
+  for (let i = 0; i <= value.length; i++) {
+    if (ctx.measureText(value.slice(0, i)).width >= relX) return i;
+  }
+  return value.length;
+}
+
+/** Selects the word under `(x, y)` in an `<input>`. */
+function selectWordInInputAtPoint(input: HTMLInputElement, clientX: number): void {
+  const { start, end } = wordOffsetsInText(input.value, caretIndexInInput(input, clientX));
+  input.focus();
+  input.setSelectionRange(start, end);
 }
 
 /**
@@ -303,6 +368,21 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
   const bodyRef = useRef<HTMLDivElement>(null);
   /** Where the entering click landed, so the caret lands there instead of jumping to the start. */
   const pendingCaretRef = useRef<{ x: number; y: number } | null>(null);
+  /** Double-click entry: select the word at this point once the editor mounts. */
+  const pendingWordSelectRef = useRef<{ x: number; y: number } | null>(null);
+  /** Label `<input>` selection to apply on mount (caret or word). */
+  const pendingLabelSelectionRef = useRef<{ start: number; end: number } | null>(null);
+  const liveSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftRef = useRef(draft);
+  const bodyDraftRef = useRef(bodyDraft);
+  const editingRef = useRef(editing);
+  const editingBodyRef = useRef(editingBody);
+  const editStartLabelRef = useRef(data.label);
+  const editStartBodyRef = useRef(data.body ?? "");
+  draftRef.current = draft;
+  bodyDraftRef.current = bodyDraft;
+  editingRef.current = editing;
+  editingBodyRef.current = editingBody;
 
   useEffect(() => {
     setDraft(data.label);
@@ -312,14 +392,35 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
     setBodyDraft(data.body ?? "");
   }, [data.body]);
 
-  useEffect(() => {
-    if (editing) inputRef.current?.focus();
+  useLayoutEffect(() => {
+    if (!editing) return;
+    editStartLabelRef.current = data.label;
+    const input = inputRef.current;
+    if (!input) return;
+    input.focus();
+    const sel = pendingLabelSelectionRef.current;
+    pendingLabelSelectionRef.current = null;
+    if (sel) {
+      input.setSelectionRange(sel.start, sel.end);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing]);
+
+  useEffect(() => {
+    if (editingBody) editStartBodyRef.current = data.body ?? "";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingBody]);
+
+  useEffect(() => {
+    data.onInlineEditChange(id, editing || editingBody);
+    return () => data.onInlineEditChange(id, false);
+  }, [id, editing, editingBody, data.onInlineEditChange]);
 
   /**
    * Runs before paint so the body never visibly flashes: fills in the editable div (its content
    * is otherwise left alone while editing so typing doesn't get clobbered by React re-rendering
    * `data.body`), then drops the caret at the point the user clicked instead of the start/end.
+   * Depends only on `editingBody` (not `data.body`) so a live persist cannot reset the caret.
    */
   useLayoutEffect(() => {
     if (!editingBody) return;
@@ -327,6 +428,12 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
     if (!el) return;
     el.textContent = data.body ?? "";
     el.focus();
+    const wordSelect = pendingWordSelectRef.current;
+    pendingWordSelectRef.current = null;
+    if (wordSelect) {
+      selectWordAtPoint(wordSelect.x, wordSelect.y, el);
+      return;
+    }
     const pending = pendingCaretRef.current;
     pendingCaretRef.current = null;
     const selection = window.getSelection();
@@ -343,21 +450,42 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
     fallback.collapse(false);
     selection.removeAllRanges();
     selection.addRange(fallback);
-  }, [editingBody, data.body]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingBody]);
 
-  const commit = () => {
-    setEditing(false);
-    if (draft.trim() !== data.label) {
-      data.onLabelChange(id, draft.trim());
+  const flushLiveSave = (live: boolean) => {
+    if (liveSaveTimerRef.current) {
+      clearTimeout(liveSaveTimerRef.current);
+      liveSaveTimerRef.current = null;
+    }
+    const opts = live ? { live: true } : undefined;
+    if (editingRef.current) {
+      data.onLabelChange(id, draftRef.current.trim(), opts);
+    }
+    if (editingBodyRef.current) {
+      data.onBodyChange(id, bodyDraftRef.current.trimEnd(), opts);
     }
   };
 
+  const scheduleLiveSave = () => {
+    if (liveSaveTimerRef.current) clearTimeout(liveSaveTimerRef.current);
+    liveSaveTimerRef.current = setTimeout(() => flushLiveSave(true), TEXT_LIVE_SAVE_MS);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (liveSaveTimerRef.current) clearTimeout(liveSaveTimerRef.current);
+    };
+  }, []);
+
+  const commit = () => {
+    flushLiveSave(false);
+    setEditing(false);
+  };
+
   const commitBody = () => {
+    flushLiveSave(false);
     setEditingBody(false);
-    const next = bodyDraft.trimEnd();
-    if (next !== (data.body ?? "")) {
-      data.onBodyChange(id, next);
-    }
   };
 
   const style = nodeVisualStyle(data.kind, data.outlineColor);
@@ -509,12 +637,24 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
           <input
             ref={inputRef}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              scheduleLiveSave();
+            }}
             onBlur={commit}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              selectWordInInputAtPoint(e.currentTarget, e.clientX);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") commit();
               if (e.key === "Escape") {
-                setDraft(data.label);
+                if (liveSaveTimerRef.current) {
+                  clearTimeout(liveSaveTimerRef.current);
+                  liveSaveTimerRef.current = null;
+                }
+                data.onLabelChange(id, editStartLabelRef.current);
+                setDraft(editStartLabelRef.current);
                 setEditing(false);
               }
             }}
@@ -537,11 +677,39 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
               // (selecting would open the detail panel's own textarea). Modifier clicks and
               // mobile taps fall through to the node's onClick so selection still works there.
               if (viewportNarrow || e.shiftKey || e.metaKey || e.ctrlKey) return;
+              if (e.detail > 1) return;
               e.stopPropagation();
+              const range = caretRangeFromPoint(e.clientX, e.clientY);
+              if (range?.startContainer.nodeType === Node.TEXT_NODE) {
+                const nodeText = range.startContainer.textContent ?? "";
+                const isPlaceholder = !data.label && nodeText === "Untitled";
+                const offset = isPlaceholder
+                  ? 0
+                  : Math.min(range.startOffset, data.label.length);
+                pendingLabelSelectionRef.current = { start: offset, end: offset };
+              }
               setEditing(true);
             }}
             onDoubleClick={(e) => {
               e.stopPropagation();
+              if (editing && inputRef.current) {
+                selectWordInInputAtPoint(inputRef.current, e.clientX);
+                return;
+              }
+              const range = caretRangeFromPoint(e.clientX, e.clientY);
+              if (range?.startContainer.nodeType === Node.TEXT_NODE) {
+                const nodeText = range.startContainer.textContent ?? "";
+                const isPlaceholder = !data.label && nodeText === "Untitled";
+                if (isPlaceholder) {
+                  pendingLabelSelectionRef.current = { start: 0, end: 0 };
+                } else {
+                  const { start, end } = wordOffsetsInText(nodeText, range.startOffset);
+                  pendingLabelSelectionRef.current = {
+                    start: Math.min(start, data.label.length),
+                    end: Math.min(end, data.label.length),
+                  };
+                }
+              }
               setEditing(true);
             }}
             style={{
@@ -596,13 +764,18 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
             onMouseDown={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => {
-              if (editingBody) return;
               e.stopPropagation();
-              pendingCaretRef.current = { x: e.clientX, y: e.clientY };
+              if (editingBody) {
+                if (bodyRef.current) selectWordAtPoint(e.clientX, e.clientY, bodyRef.current);
+                return;
+              }
+              pendingCaretRef.current = null;
+              pendingWordSelectRef.current = { x: e.clientX, y: e.clientY };
               setEditingBody(true);
             }}
             onClick={(e) => {
-              if (editingBody) return; // already editing; let the browser place the caret natively
+              if (editingBody) return;
+              if (e.detail > 1) return;
               if (e.shiftKey || e.metaKey || e.ctrlKey) return;
               // On desktop, a plain click edits right in the node (whether or not it already
               // has text) instead of selecting it and switching to the detail panel's own
@@ -614,12 +787,20 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
                 setEditingBody(true);
               }
             }}
-            onInput={(e) => setBodyDraft(e.currentTarget.innerText)}
+            onInput={(e) => {
+              setBodyDraft(e.currentTarget.innerText);
+              scheduleLiveSave();
+            }}
             onBlur={commitBody}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
                 e.preventDefault();
-                setBodyDraft(data.body ?? "");
+                if (liveSaveTimerRef.current) {
+                  clearTimeout(liveSaveTimerRef.current);
+                  liveSaveTimerRef.current = null;
+                }
+                data.onBodyChange(id, editStartBodyRef.current);
+                setBodyDraft(editStartBodyRef.current);
                 setEditingBody(false);
               } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
@@ -745,12 +926,13 @@ const FIT_VIEW_OPTIONS = { padding: 0.2, minZoom: FLOW_MIN_ZOOM, maxZoom: 1 } as
 function toFlowNodes(
   mapNodes: MindMapNode[],
   callbacks: {
-    onLabelChange: (id: string, label: string) => void;
-    onBodyChange: (id: string, body: string) => void;
+    onLabelChange: (id: string, label: string, opts?: NodeTextPersistOpts) => void;
+    onBodyChange: (id: string, body: string, opts?: NodeTextPersistOpts) => void;
     onAddChild: (id: string) => void;
     onDelete: (id: string) => void;
     onToggleComplete: (id: string) => void;
     onSelect: (id: string, additive: boolean) => void;
+    onInlineEditChange: (id: string, editing: boolean) => void;
   },
   taskMap?: Map<string, TaskItem>,
   selectedNodeIds?: string[] | null,
@@ -1005,12 +1187,39 @@ function NodeDetailPanel({
   const [collapsed, setCollapsed] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
   const [taskImportNote, setTaskImportNote] = useState<string | null>(null);
+  const liveSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const labelRef = useRef(label);
+  const bodyRef = useRef(body);
+  labelRef.current = label;
+  bodyRef.current = body;
 
   useEffect(() => {
     setLabel(linkedTask ? (linkedTask.title || node.label) : node.label);
     setBody(node.body ?? "");
     setUrl(node.url ?? "");
-  }, [node.id, node.label, node.body, node.url, linkedTask]);
+    // Only reset when switching nodes (or the linked task). Live persists while typing
+    // update node.label/body and must not clobber the in-progress field.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [node.id, linkedTask]);
+
+  const schedulePanelLiveSave = (kind: "label" | "body") => {
+    if (liveSaveTimerRef.current) clearTimeout(liveSaveTimerRef.current);
+    const nodeId = node.id;
+    liveSaveTimerRef.current = setTimeout(() => {
+      if (kind === "label") {
+        const next = labelRef.current.trim();
+        if (next !== node.label) onUpdateNode(nodeId, { label: next });
+      } else if (bodyRef.current !== (node.body ?? "")) {
+        onUpdateNode(nodeId, { body: bodyRef.current });
+      }
+    }, TEXT_LIVE_SAVE_MS);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (liveSaveTimerRef.current) clearTimeout(liveSaveTimerRef.current);
+    };
+  }, []);
 
   const isTask = node.kind === "task" && !!node.taskId;
   const boardVisible = node.visibleOnBoard !== false;
@@ -1186,8 +1395,15 @@ function NodeDetailPanel({
               <div style={LBL}>Label</div>
               <input
                 value={label}
-                onChange={(e) => setLabel(e.target.value)}
+                onChange={(e) => {
+                  setLabel(e.target.value);
+                  schedulePanelLiveSave("label");
+                }}
                 onBlur={() => {
+                  if (liveSaveTimerRef.current) {
+                    clearTimeout(liveSaveTimerRef.current);
+                    liveSaveTimerRef.current = null;
+                  }
                   if (label.trim() !== node.label) {
                     onUpdateNode(node.id, { label: label.trim() });
                   }
@@ -1568,8 +1784,15 @@ function NodeDetailPanel({
             <div style={LBL}>{node.kind === "text" ? "Paragraph text" : "Content"}</div>
             <textarea
               value={body}
-              onChange={(e) => setBody(e.target.value)}
+              onChange={(e) => {
+                setBody(e.target.value);
+                schedulePanelLiveSave("body");
+              }}
               onBlur={() => {
+                if (liveSaveTimerRef.current) {
+                  clearTimeout(liveSaveTimerRef.current);
+                  liveSaveTimerRef.current = null;
+                }
                 if (body !== (node.body ?? "")) {
                   onUpdateNode(node.id, { body });
                 }
@@ -1956,7 +2179,8 @@ export default function MindMapsView() {
   const searchParams = useSearchParams();
   const initialMapId = searchParams.get("mapId");
   const rootTaskParam = searchParams.get("rootTask");
-  const { maps, upsertMap: upsertMapRaw, deleteMap, loading: mapsLoading } = useMindMaps();
+  const { maps, upsertMap: upsertMapRaw, deleteMap, loading: mapsLoading, pullMaps, isPulling } =
+    useMindMaps();
   const { tasks, updateTask, loading: tasksLoading } = useTasks();
 
   const [selectedMapId, setSelectedMapId] = useState<string | null>(initialMapId);
@@ -2001,6 +2225,7 @@ export default function MindMapsView() {
   const [googleDocSaving, setGoogleDocSaving] = useState(false);
   const [googleDocPushing, setGoogleDocPushing] = useState(false);
   const [googleDocMessage, setGoogleDocMessage] = useState<{ text: string; error: boolean } | null>(null);
+  const [syncMessage, setSyncMessage] = useState<{ text: string; error: boolean } | null>(null);
   /** Mirrors `googleDocPushing` for reads inside the auto-sync interval, which must not close over stale state. */
   const googleDocPushingRef = useRef(false);
   /** Per-map `updatedAt` value as of the last successful push, used to detect "changes since last sync". */
@@ -2092,12 +2317,13 @@ export default function MindMapsView() {
 
   /** Latest node callbacks, kept in sync below; lets undo/redo rebuild flow nodes without a definition-order issue. */
   const fullCallbacksRef = useRef<{
-    onLabelChange: (id: string, label: string) => void;
-    onBodyChange: (id: string, body: string) => void;
+    onLabelChange: (id: string, label: string, opts?: NodeTextPersistOpts) => void;
+    onBodyChange: (id: string, body: string, opts?: NodeTextPersistOpts) => void;
     onAddChild: (id: string) => void;
     onDelete: (id: string) => void;
     onToggleComplete: (id: string) => void;
     onSelect: (id: string, additive: boolean) => void;
+    onInlineEditChange: (id: string, editing: boolean) => void;
   }>({
     onLabelChange: () => {},
     onBodyChange: () => {},
@@ -2105,11 +2331,74 @@ export default function MindMapsView() {
     onDelete: () => {},
     onToggleComplete: () => {},
     onSelect: () => {},
+    onInlineEditChange: () => {},
   });
 
   /** Latest selection, read (not depended on) by effects that rebuild flow nodes from map data. */
   const selectedNodeIdsRef = useRef<string[]>([]);
   selectedNodeIdsRef.current = selectedNodeIds;
+
+  /** Node ids currently being edited inline. Live text persist must not rebuild the canvas (that would reset the caret). */
+  const inlineEditingIdsRef = useRef(new Set<string>());
+  const onInlineEditChange = useCallback((id: string, editing: boolean) => {
+    if (editing) inlineEditingIdsRef.current.add(id);
+    else inlineEditingIdsRef.current.delete(id);
+  }, []);
+
+  /** Pull maps from the server (last-write-wins). Skips while typing or dragging. */
+  const pullFromServer = useCallback(
+    async (opts?: { manual?: boolean }) => {
+      if (inlineEditingIdsRef.current.size > 0 || dragAnchorRef.current) {
+        if (opts?.manual) {
+          setSyncMessage({ text: "Sync skipped while editing or dragging.", error: false });
+        }
+        return { changed: false, skipped: true };
+      }
+      try {
+        const result = await pullMaps();
+        if (opts?.manual) {
+          if (result.skipped) {
+            setSyncMessage({ text: "Sync skipped while saving.", error: false });
+          } else if (result.changed) {
+            setSyncMessage({ text: "Synced from server.", error: false });
+          } else {
+            setSyncMessage({ text: "Already up to date.", error: false });
+          }
+        }
+        return result;
+      } catch {
+        if (opts?.manual) {
+          setSyncMessage({ text: "Sync failed.", error: true });
+        }
+        return { changed: false, skipped: false };
+      }
+    },
+    [pullMaps],
+  );
+
+  /** Periodic cross-device sync (last-write-wins). */
+  useEffect(() => {
+    const timer = setInterval(() => {
+      void pullFromServer();
+    }, MIND_MAP_POLL_MS);
+    return () => clearInterval(timer);
+  }, [pullFromServer]);
+
+  /** If the open map was deleted on another device, fall back to the first remaining map. */
+  useEffect(() => {
+    if (selectedMapId && !maps.some((m) => m.id === selectedMapId)) {
+      setSelectedMapId(maps[0]?.id ?? null);
+      setSelectedNodeIds([]);
+      setSelectedEdgeId(null);
+    }
+  }, [maps, selectedMapId]);
+
+  /** Dismiss a successful sync toast after a few seconds. */
+  useEffect(() => {
+    if (!syncMessage || syncMessage.error) return;
+    const timer = setTimeout(() => setSyncMessage(null), 4000);
+    return () => clearTimeout(timer);
+  }, [syncMessage]);
 
   /* ─── Undo/redo history ─── */
 
@@ -2388,6 +2677,34 @@ export default function MindMapsView() {
     [selectedNodeIds, getLatestMapNodes, applyNodePositions],
   );
 
+  /** Sets the outline color on every currently selected node (last-write-wins persist). */
+  const setSelectedNodesOutlineColor = useCallback(
+    (outlineColor: string | null) => {
+      if (selectedNodeIds.length === 0) return;
+      const selectedSet = new Set(selectedNodeIds);
+      const prev = getLatestMapNodes();
+      const next = prev.map((n) =>
+        selectedSet.has(n.id) ? { ...n, outlineColor } : n,
+      );
+      const map = currentMapRef.current;
+      if (map) {
+        const updated = { ...map, nodes: next, updatedAt: new Date().toISOString() };
+        currentMapRef.current = updated;
+        upsertMap(updated);
+      }
+      setNodes((nds) =>
+        nds.map((nd) =>
+          selectedSet.has(nd.id)
+            ? { ...nd, data: { ...nd.data, outlineColor } }
+            : nd,
+        ),
+      );
+      // Edge stroke colors are derived from the source node's outline.
+      setEdges(toFlowEdges(next, mapDefaultEdgeLineType(currentMapRef.current)));
+    },
+    [selectedNodeIds, getLatestMapNodes, upsertMap, setNodes, setEdges],
+  );
+
   /** Spaces 3+ selected nodes evenly along whichever axis currently has the larger spread. */
   const distributeSelectedNodes = useCallback(() => {
     if (selectedNodeIds.length < 3) return;
@@ -2421,39 +2738,60 @@ export default function MindMapsView() {
   }, [selectedNodeIds, getLatestMapNodes, applyNodePositions]);
 
   const onLabelChange = useCallback(
-    (id: string, label: string) => {
+    (id: string, label: string, opts?: NodeTextPersistOpts) => {
       const prev = getLatestMapNodes();
-      const next = prev.map((n) => (n.id === id ? { ...n, label } : n));
-      const map = currentMapRef.current;
-      if (map) {
-        const updated = { ...map, nodes: next, updatedAt: new Date().toISOString() };
-        currentMapRef.current = updated;
-        upsertMap(updated);
+      const current = prev.find((n) => n.id === id);
+      if (!current) return;
+      const textChanged = label !== current.label;
+      if (opts?.live && !textChanged) return;
+
+      if (textChanged) {
+        const next = prev.map((n) => (n.id === id ? { ...n, label } : n));
+        const map = currentMapRef.current;
+        if (map) {
+          const updated = { ...map, nodes: next, updatedAt: new Date().toISOString() };
+          currentMapRef.current = updated;
+          upsertMap(updated, { skipHistory: !!opts?.live });
+        }
       }
-      setNodes((nds) =>
-        nds.map((nd) =>
-          nd.id === id ? { ...nd, data: { ...nd.data, label } } : nd,
-        ),
-      );
+
+      // Live saves must not rewrite flow node data — that remounts the editor and resets the caret.
+      if (!opts?.live) {
+        setNodes((nds) =>
+          nds.map((nd) =>
+            nd.id === id ? { ...nd, data: { ...nd.data, label } } : nd,
+          ),
+        );
+      }
     },
     [getLatestMapNodes, upsertMap, setNodes],
   );
 
   const onBodyChange = useCallback(
-    (id: string, body: string) => {
+    (id: string, body: string, opts?: NodeTextPersistOpts) => {
       const prev = getLatestMapNodes();
-      const next = prev.map((n) => (n.id === id ? { ...n, body } : n));
-      const map = currentMapRef.current;
-      if (map) {
-        const updated = { ...map, nodes: next, updatedAt: new Date().toISOString() };
-        currentMapRef.current = updated;
-        upsertMap(updated);
+      const current = prev.find((n) => n.id === id);
+      if (!current) return;
+      const textChanged = body !== (current.body ?? "");
+      if (opts?.live && !textChanged) return;
+
+      if (textChanged) {
+        const next = prev.map((n) => (n.id === id ? { ...n, body } : n));
+        const map = currentMapRef.current;
+        if (map) {
+          const updated = { ...map, nodes: next, updatedAt: new Date().toISOString() };
+          currentMapRef.current = updated;
+          upsertMap(updated, { skipHistory: !!opts?.live });
+        }
       }
-      setNodes((nds) =>
-        nds.map((nd) =>
-          nd.id === id ? { ...nd, data: { ...nd.data, body } } : nd,
-        ),
-      );
+
+      if (!opts?.live) {
+        setNodes((nds) =>
+          nds.map((nd) =>
+            nd.id === id ? { ...nd, data: { ...nd.data, body } } : nd,
+          ),
+        );
+      }
     },
     [getLatestMapNodes, upsertMap, setNodes],
   );
@@ -2505,12 +2843,19 @@ export default function MindMapsView() {
    * that callback back into `selectedNodeIds` (which then rewrites `node.selected`) is a closed
    * loop and the source of the "Maximum update depth exceeded" crash. `onSelectionEnd` runs
    * once, when the user finishes a selection drag, so it cannot re-enter.
+   *
+   * Hold Shift while finishing the box to add the enclosed nodes to the existing selection
+   * (React Flow itself clears selection when the box starts, so we re-union from our own state).
    */
-  const onSelectionEnd = useCallback(() => {
+  const onSelectionEnd = useCallback((event: React.MouseEvent) => {
     const instance = reactFlowInstanceRef.current;
-    const nextIds = instance
+    const boxIds = instance
       ? instance.getNodes().filter((n) => n.selected).map((n) => n.id)
       : [];
+    const additive = Boolean(event.shiftKey);
+    const nextIds = additive
+      ? Array.from(new Set([...selectedNodeIdsRef.current, ...boxIds]))
+      : boxIds;
     setSelectedNodeIds((prev) => {
       if (prev.length === nextIds.length && prev.every((id) => nextIds.includes(id))) {
         return prev;
@@ -2528,8 +2873,9 @@ export default function MindMapsView() {
       onDelete: null as unknown as (id: string) => void,
       onToggleComplete,
       onSelect: onSelectNode,
+      onInlineEditChange,
     }),
-    [onLabelChange, onBodyChange, onToggleComplete, onSelectNode],
+    [onLabelChange, onBodyChange, onToggleComplete, onSelectNode, onInlineEditChange],
   );
 
   const onAddChild = useCallback(
@@ -2634,6 +2980,9 @@ export default function MindMapsView() {
       setEdges([]);
       return;
     }
+    // A live text persist updates `updatedAt` so auto-sync can pick it up; rebuilding flow nodes
+    // in the middle of typing would remount the editor and jump the caret. Skip until edit ends.
+    if (inlineEditingIdsRef.current.size > 0) return;
     setNodes(toFlowNodes(selectedMap.nodes, fullCallbacks, taskMap, selectedNodeIdsRef.current));
     setEdges(toFlowEdges(selectedMap.nodes, mapDefaultEdgeLineType(selectedMap)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2974,6 +3323,43 @@ export default function MindMapsView() {
     [upsertMap],
   );
 
+  const downloadMapFile = useCallback((map: MindMapDocument) => {
+    const blob = new Blob([serializeMindMapFile(map)], {
+      type: "application/json;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = mindMapDownloadFilename(map.title || "Untitled Map");
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const importFileInputRef = useRef<HTMLInputElement>(null);
+
+  const importMapFromFile = useCallback(
+    async (file: File) => {
+      try {
+        const text = await file.text();
+        const parsed = parseMindMapFile(text);
+        const imported = cloneMindMapForImport(parsed, newId);
+        upsertMap(imported);
+        setSelectedMapId(imported.id);
+        setSelectedNodeIds([]);
+        setSelectedEdgeId(null);
+        setSyncMessage({ text: `Loaded “${imported.title}”.`, error: false });
+      } catch (err) {
+        setSyncMessage({
+          text: err instanceof Error ? err.message : "Could not load that file.",
+          error: true,
+        });
+      }
+    },
+    [upsertMap],
+  );
+
   /** Flow-space position for the middle of the currently visible canvas (falls back to a fixed spot before the pane has mounted/initialized). */
   const getViewportCenter = useCallback((): { x: number; y: number } => {
     const instance = reactFlowInstanceRef.current;
@@ -3291,7 +3677,7 @@ export default function MindMapsView() {
               </button>
             )}
           </div>
-          <div style={{ padding: "8px 14px" }}>
+          <div style={{ padding: "8px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
             <button
               type="button"
               onClick={createMap}
@@ -3311,6 +3697,37 @@ export default function MindMapsView() {
             >
               <Plus size={12} /> New mind map
             </button>
+            <button
+              type="button"
+              onClick={() => importFileInputRef.current?.click()}
+              title="Load a mind map from a previously downloaded file"
+              style={{
+                width: "100%",
+                fontSize: 12,
+                padding: "6px 10px",
+                borderRadius: 6,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-tertiary)",
+                color: "var(--text-primary)",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <Upload size={12} /> Load from file
+            </button>
+            <input
+              ref={importFileInputRef}
+              type="file"
+              accept=".json,application/json,.abundance-mindmap.json"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void importMapFromFile(file);
+              }}
+            />
           </div>
           <div style={{ flex: 1, overflowY: "auto", padding: "0 6px" }}>
             {maps.map((m) => (
@@ -3384,6 +3801,30 @@ export default function MindMapsView() {
                     {m.title || "Untitled Map"}
                   </span>
                 )}
+                <button
+                  type="button"
+                  title="Download map"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    downloadMapFile(m);
+                  }}
+                  style={{
+                    flexShrink: 0,
+                    width: 20,
+                    height: 20,
+                    borderRadius: 4,
+                    border: "none",
+                    background: "transparent",
+                    color: "var(--text-muted)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    padding: 0,
+                  }}
+                >
+                  <Download size={12} />
+                </button>
                 <button
                   type="button"
                   title="Duplicate map"
@@ -3585,6 +4026,29 @@ export default function MindMapsView() {
                 <Redo size={14} />
               </button>
 
+              <button
+                type="button"
+                onClick={() => void pullFromServer({ manual: true })}
+                disabled={isPulling}
+                title="Pull latest from server"
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 6,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-secondary)",
+                  color: "var(--text-primary)",
+                  cursor: isPulling ? "wait" : "pointer",
+                  opacity: isPulling ? 0.6 : 1,
+                  padding: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Refresh size={14} />
+              </button>
+
               <select
                 value={addKind}
                 onChange={(e) => setAddKind(e.target.value as MindMapNodeKind)}
@@ -3646,6 +4110,26 @@ export default function MindMapsView() {
                 <Plus size={12} /> Add node
               </button>
 
+              <button
+                type="button"
+                onClick={() => downloadMapFile(selectedMap)}
+                title="Download this mind map as a file"
+                style={{
+                  fontSize: 12,
+                  padding: "4px 10px",
+                  borderRadius: 6,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-secondary)",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                <Download size={12} /> Download
+              </button>
+
               {selectedNodeIds.length === 2 && (
                 <button
                   type="button"
@@ -3702,6 +4186,53 @@ export default function MindMapsView() {
                   >
                     Align vertical
                   </button>
+                  <div
+                    title="Outline color for all selected nodes"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      padding: "3px 6px",
+                      borderRadius: 6,
+                      border: "1px solid var(--border-color)",
+                      background: "var(--bg-secondary)",
+                    }}
+                  >
+                    {NODE_OUTLINE_COLORS.map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        title={`Set outline to ${c}`}
+                        onClick={() => setSelectedNodesOutlineColor(c)}
+                        style={{
+                          width: 16,
+                          height: 16,
+                          borderRadius: "50%",
+                          background: c,
+                          border: "1px solid var(--border-color)",
+                          cursor: "pointer",
+                          padding: 0,
+                          flexShrink: 0,
+                        }}
+                      />
+                    ))}
+                    <button
+                      type="button"
+                      title="Reset outline to default"
+                      onClick={() => setSelectedNodesOutlineColor(null)}
+                      style={{
+                        fontSize: 10,
+                        color: "var(--text-muted)",
+                        background: "none",
+                        border: "none",
+                        cursor: "pointer",
+                        padding: "0 2px",
+                        textDecoration: "underline",
+                      }}
+                    >
+                      Reset
+                    </button>
+                  </div>
                 </>
               )}
 
@@ -4095,6 +4626,47 @@ export default function MindMapsView() {
             {mapsLoading
               ? "Loading..."
               : "Select a mind map or create a new one"}
+          </div>
+        )}
+
+        {syncMessage && (
+          <div
+            style={{
+              position: "absolute",
+              top: 48,
+              left: sidebarOpen && !viewportNarrow ? 10 : 52,
+              right: viewportNarrow ? 10 : undefined,
+              zIndex: 12,
+              maxWidth: viewportNarrow ? undefined : 320,
+              padding: "8px 10px",
+              borderRadius: 8,
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-secondary)",
+              boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
+              fontSize: 11,
+              lineHeight: 1.4,
+              color: syncMessage.error ? "var(--accent-red, #ef4444)" : "var(--accent-green, #22c55e)",
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 8,
+            }}
+          >
+            <span style={{ flex: 1 }}>{syncMessage.text}</span>
+            <button
+              type="button"
+              onClick={() => setSyncMessage(null)}
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                fontSize: 14,
+                lineHeight: 1,
+                padding: 0,
+              }}
+            >
+              &times;
+            </button>
           </div>
         )}
       </div>

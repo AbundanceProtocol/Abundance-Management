@@ -1,8 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Section, TaskItem, NewTask, TimeUnit, TaskPriority, SectionType } from "./types";
-import type { MindMapsEnvironment, MindMapDocument } from "./mindMapTypes";
+import {
+  mergeMapsLastWriteWins,
+  type MindMapsEnvironment,
+  type MindMapDocument,
+} from "./mindMapTypes";
 
 export function useSections() {
   const [sections, setSections] = useState<Section[]>([]);
@@ -270,31 +274,68 @@ export function useTasks() {
 export function useMindMaps() {
   const [maps, setMaps] = useState<MindMapDocument[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isPulling, setIsPulling] = useState(false);
+  /** While > 0, skip server pulls so an in-flight PUT is not overwritten by stale data. */
+  const persistInFlightRef = useRef(0);
+
+  const applyRemoteMaps = useCallback((remote: MindMapDocument[]) => {
+    let changed = false;
+    setMaps((prev) => {
+      const next = mergeMapsLastWriteWins(prev, remote);
+      const prevSig = prev.map((m) => `${m.id}:${m.updatedAt}`).sort().join("|");
+      const nextSig = next.map((m) => `${m.id}:${m.updatedAt}`).sort().join("|");
+      changed = prevSig !== nextSig;
+      return next;
+    });
+    return changed;
+  }, []);
 
   const fetchMaps = useCallback(async () => {
     try {
       const res = await fetch("/api/mind-maps");
       const data = (await res.json()) as MindMapsEnvironment;
-      setMaps(data.maps ?? []);
+      applyRemoteMaps(data.maps ?? []);
     } catch (err) {
       console.error("Failed to fetch mind maps:", err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyRemoteMaps]);
 
   useEffect(() => {
     fetchMaps();
   }, [fetchMaps]);
 
   const persist = useCallback(async (next: MindMapDocument[]) => {
+    persistInFlightRef.current += 1;
     setMaps(next);
-    await fetch("/api/mind-maps", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ maps: next }),
-    });
+    try {
+      await fetch("/api/mind-maps", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maps: next }),
+      });
+    } finally {
+      persistInFlightRef.current -= 1;
+    }
   }, []);
+
+  /** Pull the latest maps from the server (last-write-wins per map). */
+  const pullMaps = useCallback(async (): Promise<{ changed: boolean; skipped?: boolean }> => {
+    if (persistInFlightRef.current > 0) {
+      return { changed: false, skipped: true };
+    }
+    setIsPulling(true);
+    try {
+      const res = await fetch("/api/mind-maps");
+      if (!res.ok) throw new Error("Failed to fetch mind maps");
+      const data = (await res.json()) as MindMapsEnvironment;
+      const changed = applyRemoteMaps(data.maps ?? []);
+      return { changed };
+    } finally {
+      setIsPulling(false);
+    }
+  }, [applyRemoteMaps]);
 
   const upsertMap = useCallback(
     async (map: MindMapDocument) => {
@@ -313,5 +354,5 @@ export function useMindMaps() {
     [maps, persist]
   );
 
-  return { maps, loading, upsertMap, deleteMap, refetch: fetchMaps };
+  return { maps, loading, isPulling, upsertMap, deleteMap, pullMaps, refetch: fetchMaps };
 }

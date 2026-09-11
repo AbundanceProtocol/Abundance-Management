@@ -636,11 +636,19 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
         {editing ? (
           <input
             ref={inputRef}
+            className="nodrag nopan"
             value={draft}
             onChange={(e) => {
               setDraft(e.target.value);
               scheduleLiveSave();
             }}
+            onMouseDown={(e) => {
+              // React Flow's d3-drag calls preventDefault on node mousedown, which blocks the
+              // browser from moving the caret. `nodrag` skips that drag filter so native
+              // click-to-place-caret (and drag-to-select) work inside the input.
+              e.stopPropagation();
+            }}
+            onClick={(e) => e.stopPropagation()}
             onBlur={commit}
             onDoubleClick={(e) => {
               e.stopPropagation();
@@ -668,6 +676,7 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
               width: "100%",
               outline: "none",
               padding: 0,
+              cursor: "text",
             }}
           />
         ) : (
@@ -759,9 +768,25 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
            */}
           <div
             ref={bodyRef}
+            className="nodrag nopan"
             contentEditable={editingBody}
             suppressContentEditableWarning
-            onMouseDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => {
+              // `nodrag` keeps React Flow from preventDefault-ing this mousedown (which would
+              // freeze the caret). While already editing, place the caret at the click point
+              // so moving between spots in the same node always works.
+              e.stopPropagation();
+              if (!editingBody) return;
+              if (e.detail > 1) return; // let double-click word-select handle the second press
+              const el = bodyRef.current;
+              if (!el) return;
+              const range = caretRangeFromPoint(e.clientX, e.clientY);
+              if (!range || !el.contains(range.startContainer)) return;
+              const selection = window.getSelection();
+              if (!selection) return;
+              selection.removeAllRanges();
+              selection.addRange(range);
+            }}
             onPointerDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => {
               e.stopPropagation();
@@ -774,7 +799,10 @@ function MindMapNodeComponent({ id, data }: NodeProps<Node<MindMapNodeData>>) {
               setEditingBody(true);
             }}
             onClick={(e) => {
-              if (editingBody) return;
+              if (editingBody) {
+                e.stopPropagation();
+                return;
+              }
               if (e.detail > 1) return;
               if (e.shiftKey || e.metaKey || e.ctrlKey) return;
               // On desktop, a plain click edits right in the node (whether or not it already
@@ -1223,6 +1251,7 @@ function NodeDetailPanel({
 
   const isTask = node.kind === "task" && !!node.taskId;
   const boardVisible = node.visibleOnBoard !== false;
+  const includeInGoogleDoc = !node.excludeFromGoogleDoc;
 
   useEffect(() => {
     setTaskSearch("");
@@ -1387,6 +1416,55 @@ function NodeDetailPanel({
                 <ChevronDown size={14} />
               </button>
             </div>
+          </div>
+
+          {/* Include in Google Doc */}
+          <div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <span style={{ fontSize: 13, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 6 }}>
+                <FileText size={14} />
+                Include in Google Doc
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={includeInGoogleDoc}
+                title={includeInGoogleDoc ? "Included in Google Doc sync" : "Omitted from Google Doc sync"}
+                onClick={() =>
+                  onUpdateNode(node.id, { excludeFromGoogleDoc: includeInGoogleDoc })
+                }
+                style={{
+                  ...TOGGLE,
+                  background: includeInGoogleDoc
+                    ? "var(--accent-blue)"
+                    : "var(--bg-tertiary)",
+                }}
+              >
+                <span
+                  style={{
+                    position: "absolute",
+                    top: 2,
+                    left: includeInGoogleDoc ? 18 : 2,
+                    width: 14,
+                    height: 14,
+                    borderRadius: "50%",
+                    background: "white",
+                    transition: "left 0.2s",
+                  }}
+                />
+              </button>
+            </div>
+            {!includeInGoogleDoc && (
+              <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "6px 0 0", lineHeight: 1.4 }}>
+                This node is omitted from Doc sync. Its children still export.
+              </p>
+            )}
           </div>
 
           {/* Label / title (text nodes have no title — they render as a bodiless paragraph) */}
@@ -4382,14 +4460,16 @@ export default function MindMapsView() {
                   </button>
                 </div>
                 <p style={{ margin: 0, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.4 }}>
-                  Paste the URL of a Google Doc the connected Google account can edit. Pushing writes
-                  this map&rsquo;s outline into a reserved section of that doc, leaving the rest untouched.
+                  Paste the full URL of a Google Doc tab the connected Google account can edit
+                  (include <code style={{ fontSize: 10 }}>?tab=…</code> for multi-tab docs). Push
+                  writes this map&rsquo;s outline into a reserved section of that tab, leaving the
+                  rest untouched.
                 </p>
                 <input
                   type="text"
                   value={googleDocUrlInput}
                   onChange={(e) => setGoogleDocUrlInput(e.target.value)}
-                  placeholder="https://docs.google.com/document/d/…/edit"
+                  placeholder="https://docs.google.com/document/d/…/edit?tab=t.…"
                   style={{
                     width: "100%",
                     boxSizing: "border-box",

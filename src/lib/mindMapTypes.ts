@@ -43,6 +43,8 @@ export interface MindMapNode {
   url?: string | null;
   /** When true, a linked task is also shown on the Tasks board; when false it is mind-map-only. */
   visibleOnBoard?: boolean;
+  /** When true, this node is omitted from Google Doc sync (children still export at this depth). */
+  excludeFromGoogleDoc?: boolean;
   /** Shape of the edge from parent to this node; omit to use the map default. */
   parentEdgeLineType?: MindMapEdgeLineType | null;
   /** Stroke style for parent→this edge; omit for solid. */

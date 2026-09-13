@@ -5,7 +5,7 @@ export function needsSetupWizard(): boolean {
   if (isAuthDisabled()) return false;
   if (isSetupComplete()) return false;
   if (process.env.APP_PASSWORD?.trim()) return false;
-  return Boolean(getAuthSecret().trim());
+  return true;
 }
 
 export function isLegacyPasswordLogin(): boolean {

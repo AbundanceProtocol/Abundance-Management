@@ -4,12 +4,14 @@ import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type Engine = "mongo" | "postgres" | "sqlite";
+type MongoPreset = "atlas" | "custom" | "local";
 
 export default function SetupPage() {
   const router = useRouter();
   const [checked, setChecked] = useState(false);
   const [engine, setEngine] = useState<Engine>("mongo");
-  const [mongoUri, setMongoUri] = useState("mongodb://localhost:27017");
+  const [mongoPreset, setMongoPreset] = useState<MongoPreset>("atlas");
+  const [mongoUri, setMongoUri] = useState("mongodb+srv://<user>:<password>@<cluster>.mongodb.net");
   const [mongoDbName, setMongoDbName] = useState("abundance-strategy");
   const [postgresUrl, setPostgresUrl] = useState("postgres://user:pass@localhost:5432/abundance");
   const [sqlitePath, setSqlitePath] = useState("");
@@ -148,12 +150,67 @@ export default function SetupPage() {
 
         {engine === "mongo" ? (
           <>
+            <label style={labelStyle}>MongoDB hosting</label>
+            <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+              {(
+                [
+                  { id: "atlas", label: "Atlas", sub: "Cross-device sync ✓" },
+                  { id: "custom", label: "Custom URI", sub: "Self-hosted" },
+                  { id: "local", label: "Local dev", sub: "localhost" },
+                ] as { id: MongoPreset; label: string; sub: string }[]
+              ).map(({ id, label, sub }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => {
+                    setMongoPreset(id);
+                    if (id === "local")
+                      setMongoUri("mongodb://localhost:27017");
+                    else if (id === "atlas")
+                      setMongoUri("mongodb+srv://<user>:<password>@<cluster>.mongodb.net");
+                    else
+                      setMongoUri("");
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: "8px 6px",
+                    borderRadius: 6,
+                    border: `1px solid ${mongoPreset === id ? "var(--accent-blue)" : "var(--border-color)"}`,
+                    background: mongoPreset === id ? "rgba(59,130,246,0.12)" : "var(--bg-primary)",
+                    color: mongoPreset === id ? "var(--accent-blue)" : "var(--text-secondary)",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    textAlign: "center",
+                  }}
+                >
+                  {label}
+                  <span style={{ display: "block", fontWeight: 400, fontSize: 11, marginTop: 2, color: "var(--text-muted)" }}>
+                    {sub}
+                  </span>
+                </button>
+              ))}
+            </div>
+            {mongoPreset === "atlas" ? (
+              <p style={hintStyle}>
+                Free tier at{" "}
+                <span style={{ color: "var(--accent-blue)" }}>mongodb.com/atlas</span> — create a
+                cluster, click &ldquo;Connect&rdquo; → &ldquo;Drivers&rdquo;, and paste the connection
+                string below. Any device accessing this app will share the same data.
+              </p>
+            ) : null}
             <label style={labelStyle}>MongoDB URI</label>
             <input
               value={mongoUri}
               onChange={(e) => setMongoUri(e.target.value)}
               style={inputStyle}
-              placeholder="mongodb://localhost:27017"
+              placeholder={
+                mongoPreset === "atlas"
+                  ? "mongodb+srv://user:pass@cluster.mongodb.net"
+                  : mongoPreset === "local"
+                  ? "mongodb://localhost:27017"
+                  : "mongodb://user:pass@host:27017"
+              }
             />
             <label style={labelStyle}>Database name</label>
             <input
@@ -161,10 +218,6 @@ export default function SetupPage() {
               onChange={(e) => setMongoDbName(e.target.value)}
               style={inputStyle}
             />
-            <p style={hintStyle}>
-              Use a connection string your server can reach. For local dev, run MongoDB on the default port
-              or use Docker.
-            </p>
           </>
         ) : null}
 
